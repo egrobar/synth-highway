@@ -1,0 +1,22 @@
+# audio and generated data stay out of the repo
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.m4a
+out/
+input/
+stems/
+*.lyrics.json
+
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# editors / os
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

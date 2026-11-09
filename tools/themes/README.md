@@ -80,8 +80,11 @@ songs, except public-domain pieces (Aurora Pass). `Song(id, title, theme, bpm, l
 `song.hit(t, instrument, midi, seconds, amp, pan)` for backing, `song.melody(bar, ["E4:1 G4:0.5 r:1", ...])`
 for the lead (durations in beats), `song.section(name, bar)`, `song.write(bars)`.
 
-- Lanes are the Q row, MIDI 60 (C4) to 79 (G5). Write melodies in C major or A minor so they stay on
-  white keys, or pass `lane_shift` to transpose the chart only. The audio always plays what you wrote.
+- Players use the home row, `A S D F G H J K L ;`, for every song. `songlib.write_chart` maps the
+  melody onto those lanes for you: one scale step per lane, higher notes further right, notes outside
+  the window folded by an octave (it prints how many). Write in any key and range. A melody within
+  eight scale steps stays on the eight resting keys; a wider one adds G and H (index-finger reaches).
+  Easy always uses the eight resting keys. The audio always plays exactly what you wrote.
 - Notes of 0.75 s or longer are holds. Aim for a quarter to a third of the notes as holds.
 - Difficulty climbs along the map. County Line (region 1) is about 0.9 notes a second on Normal.
   Region 2 about 1.2 to 1.6, region 3 1.5 to 2, region 4 2 to 2.6, region 5 varies by piece. Never

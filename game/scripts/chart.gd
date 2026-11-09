@@ -16,6 +16,8 @@ class Note:
 	var t: float
 	var d: float
 	var p: int
+	## What the player presses: 0 (A) to 9 (;) on the home row, 10-18 for sharps (see KeyMap).
+	var lane: int
 	var is_hold: bool
 	var state: Chart.NoteState = Chart.NoteState.PENDING
 	var hold_state: Chart.HoldState = Chart.HoldState.NONE
@@ -23,10 +25,14 @@ class Note:
 	## Seconds of the note's length the player has held so far.
 	var sustained: float = 0.0
 
-	func _init(start: float, length: float, midi_pitch: int) -> void:
+	func _init(start: float, length: float, midi_pitch: int, home_lane: int = -1, sharp: bool = false) -> void:
 		t = start
 		d = length
 		p = midi_pitch
+		# Charts from before the home-row layout carry no lane: count white keys up from C4.
+		lane = home_lane if home_lane >= 0 else Chart.fallback_lane(midi_pitch)
+		if sharp:
+			lane += KeyMap.SHARP_BASE
 		is_hold = length >= Chart.HOLD_MIN_SECONDS
 
 	func end_time() -> float:
@@ -80,7 +86,7 @@ static func load_file(path: String, level: String = "normal") -> Chart:
 	chart.difficulty = level if levels.has(level) else "normal"
 	var raw_notes: Array = levels.get(chart.difficulty, data["notes"])
 	for raw: Dictionary in raw_notes:
-		chart.notes.append(Note.new(raw["t"], raw["d"], int(raw["p"])))
+		chart.notes.append(Note.new(raw["t"], raw["d"], int(raw["p"]), int(raw.get("l", -1)), int(raw.get("s", 0)) == 1))
 	chart.notes.sort_custom(func(a: Note, b: Note) -> bool: return a.t < b.t)
 	return chart
 
@@ -99,17 +105,36 @@ static func _resolve(chart_path: String, audio: String) -> String:
 	return chart_path.get_base_dir().path_join(audio)
 
 
-## Builds a chart directly from [time, duration, pitch] triples, for tests.
+## Builds a chart directly from [time, duration, lane] triples, for tests.
 static func from_triples(triples: Array) -> Chart:
 	var chart := Chart.new()
 	for row: Array in triples:
-		chart.notes.append(Note.new(row[0], row[1], row[2]))
+		chart.notes.append(Note.new(row[0], row[1], 60, int(row[2])))
 	return chart
+
+
+## White keys counted up from C4, clamped to the ten lanes. Only for charts without lanes.
+static func fallback_lane(pitch: int) -> int:
+	var whites: int = 0
+	var step: int = 1 if pitch >= 60 else -1
+	var p: int = 60
+	while p != pitch:
+		p += step
+		if not [1, 3, 6, 8, 10].has(posmod(p, 12)):
+			whites += step
+	return clampi(whites, 0, KeyMap.COUNT - 1)
 
 
 func reset() -> void:
 	for note: Note in notes:
 		note.reset()
+
+
+func has_sharps() -> bool:
+	for note: Note in notes:
+		if KeyMap.is_sharp(note.lane):
+			return true
+	return false
 
 
 func beat_seconds() -> float:

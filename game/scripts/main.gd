@@ -1,19 +1,22 @@
 extends Node
-## Game flow: title, the route map, a region's songs, the drive, results; plus
-## the timing check and loading your own song. The region's world keeps rolling
-## behind every screen.
+## Game flow: title → the route (regions and their songs on one screen) → drive →
+## results; plus the timing check and loading your own song. The selected region's
+## world keeps rolling behind every screen.
 ##
-## Regions unlock in order: clearing any song in one opens the next.
+## The route screen shows everything at once: a strip of regions along the top,
+## the selected region's songs in the middle, and the selected song's details on
+## the right. Regions unlock in order: clearing any song in one opens the next.
+##
 ## Options for automated checks, passed after "--" on the command line:
 ##   --bot=perfect|tapper|sloppy|afk  --song=<id>  --difficulty=easy|normal
 ##       play a song with a bot through the real input path (add --fast for headless, no audio)
 ##   --muted                silence output (timing still runs on the real device)
 ##   --shots=DIR [--shot-at=SECONDS]   screenshots during a real-time bot run
-##   --screen=title|map|songs --shot=PATH [--region=<id>]   capture a menu and quit
+##   --screen=title|route --shot=PATH [--region=<id>] [--song=<id>]   capture a screen and quit
 ##   --import-file=PATH [--import-title=...] [--region=<id>]   run an import without the file picker
 ##   --unlock-all           open every region
 
-enum Screen { TITLE, MAP, SONGS, IMPORT, CALIBRATE, PLAYING, RESULTS }
+enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS }
 
 const CALIBRATE_CLICKS := 12
 const CALIBRATE_INTERVAL := 0.6
@@ -21,6 +24,8 @@ const CALIBRATE_SKIP := 2
 const SHOT_TIMES: Array[float] = [-1.0, 9.0, 12.2, 33.0, 60.0]
 const SFX_NAMES: Array[String] = ["click", "wrong", "ui", "held", "out_of_gas"]
 const SONG_ROWS := 7
+const ROW_HEIGHT := 62.0
+const LIST_TOP := 196.0
 const AUDIO_FILTERS := "*.mp3, *.wav, *.flac, *.ogg, *.aiff, *.aif, *.mid, *.midi ; Songs (audio or MIDI)"
 
 var _screen: Screen = Screen.TITLE
@@ -36,8 +41,8 @@ var _shot_index: int = 0
 
 var _regions: Array[Dictionary] = []
 var _region_index: int = 0
+var _song_choice: Dictionary = {}
 var _songs: Array[Dictionary] = []
-var _song_index: int = 0
 var _difficulty: String = "normal"
 var _current_song: Dictionary = {}
 var _remove_armed_until: int = 0
@@ -76,28 +81,26 @@ func _ready() -> void:
 	if _options.has("muted"):
 		AudioServer.set_bus_mute(0, true)
 	if _options.has("region"):
-		_region_index = maxi(0, _regions.map(func(r: Dictionary) -> String: return r["id"]).find(_options["region"]))
+		_region_index = maxi(0, _region_ids().find(str(_options["region"])))
 	if _options.has("difficulty"):
 		_difficulty = str(_options["difficulty"])
 	if _options.has("bot"):
-		var song: Dictionary = SongLibrary.find(str(_options.get("song", "county_line")))
-		_start_run(song)
+		_start_run(SongLibrary.find(str(_options.get("song", "county_line"))))
 		if _options.has("fast"):
 			var result: Dictionary = _session.run_to_end_headless()
 			print("RESULT ", JSON.stringify(result))
 			get_tree().quit()
 		return
 	if _options.has("import-file"):
-		_show_songs()
+		_show_route()
 		_begin_import(str(_options["import-file"]), str(_options.get("import-title", "")), _regions[_region_index]["id"])
 		return
-	match str(_options.get("screen", "title")):
-		"map":
-			_show_map()
-		"songs":
-			_show_songs()
-		_:
-			_show_title()
+	if _options.has("song"):
+		_select_song_id(str(_options["song"]))
+	if str(_options.get("screen", "title")) == "route":
+		_show_route()
+	else:
+		_show_title()
 
 
 func _parse_args() -> void:
@@ -111,6 +114,10 @@ func _load_regions() -> void:
 		if ResourceLoader.exists("res://scripts/themes/%s.gd" % id):
 			_regions.append(Stage.region_info(id))
 	_regions.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a.get("order", 99)) < int(b.get("order", 99)))
+
+
+func _region_ids() -> Array:
+	return _regions.map(func(r: Dictionary) -> String: return r["id"])
 
 
 func _build_audio() -> void:
@@ -150,7 +157,7 @@ func _process(_delta: float) -> void:
 		_tick_calibration()
 	elif _screen == Screen.PLAYING and _options.has("shots"):
 		_take_due_shots()
-	if _options.has("shot") and Time.get_ticks_msec() > 4000:
+	if _options.has("shot") and not _options.has("import-file") and Time.get_ticks_msec() > 4000:
 		_save_shot(str(_options["shot"]))
 		get_tree().quit()
 
@@ -161,7 +168,7 @@ func _input(event: InputEvent) -> void:
 			and (event as InputEventKey).physical_keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		_importer.cancel()
-		_show_songs()
+		_show_route()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -172,26 +179,27 @@ func _unhandled_input(event: InputEvent) -> void:
 		Screen.TITLE:
 			if code == KEY_SPACE or code == KEY_ENTER:
 				_click()
-				_show_map()
+				_show_route()
 			elif code == KEY_C:
 				_click()
 				_show_calibration()
-		Screen.MAP:
-			_map_key(code)
-		Screen.SONGS:
-			_songs_key(code)
+		Screen.ROUTE:
+			_route_key(code)
 		Screen.CALIBRATE:
 			if code == KEY_ESCAPE:
 				_show_title()
 			elif code == KEY_SPACE and not _calib_done:
 				_calib_taps.append(Time.get_ticks_usec())
 		Screen.RESULTS:
-			if code == KEY_SPACE or code == KEY_ENTER:
+			if code == KEY_ENTER:
+				_click()
+				_drive_next()
+			elif code == KEY_SPACE:
 				_click()
 				_start_run(_current_song)
 			elif code == KEY_ESCAPE:
 				_click()
-				_show_songs()
+				_show_route()
 
 
 func _click() -> void:
@@ -219,16 +227,31 @@ func _region_unlocked(index: int) -> bool:
 	return false
 
 
+func _accent(region: Dictionary) -> Color:
+	return Ui.color_from_hex(str(region.get("accent", "#3fd8ff")))
+
+
 func _hint(text: String) -> void:
 	var hint := Ui.label(text, 24, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -72, 0, -36, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(hint)
 
 
 func _show_toast(text: String) -> void:
+	if _toast and is_instance_valid(_toast):
+		_toast.queue_free()
 	_toast = Ui.label(text, 26, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(_toast, 0.0, 1.0, 1.0, 1.0, 0, -118, 0, -82, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(_toast, 0.0, 1.0, 1.0, 1.0, 0, -104, 0, -70, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(_toast)
+
+
+## Calls `action` when the control is clicked with the left button.
+func _on_click(control: Control, action: Callable) -> void:
+	control.mouse_filter = Control.MOUSE_FILTER_STOP
+	control.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	control.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.pressed and (e as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			action.call())
 
 
 # ---------------------------------------------------------------- title
@@ -239,194 +262,297 @@ func _show_title() -> void:
 	_screen = Screen.TITLE
 	_show_world(_regions[_region_index]["id"])
 	_ambient.volume_db = -9.0
-	_ui.add_child(Ui.dim_panel(0.25))
+	_ui.add_child(Ui.dim_panel(0.3))
 	var logo := Ui.image("res://assets/textures/logo.png")
-	Ui.anchor(logo, 0.5, 0.0, 0.5, 0.0, -520, 60, 520, 330)
+	Ui.anchor(logo, 0.5, 0.0, 0.5, 0.0, -500, 40, 500, 300)
 	_ui.add_child(logo)
-	var line := Ui.label("A night drive in five regions, played on your keyboard.", 32, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(line, 0.0, 0.0, 1.0, 0.0, 0, 340, 0, 390, HORIZONTAL_ALIGNMENT_CENTER)
+	var line := Ui.label("A night drive in five regions, played on your keyboard's home row.", 32, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(line, 0.0, 0.0, 1.0, 0.0, 0, 300, 0, 348, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(line)
-	var how := Ui.label("Press the letter on each note as it reaches the line. Long notes: keep holding.", 26, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(how, 0.0, 0.0, 1.0, 0.0, 0, 396, 0, 436, HORIZONTAL_ALIGNMENT_CENTER)
-	_ui.add_child(how)
+	_ui.add_child(_home_row_guide(400.0))
 	_hint("SPACE  start        C  timing check")
 
 
-# ---------------------------------------------------------------- the route map
+## The ten keys, as they sit under your hands: fingers rest on A S D F and J K L ;,
+## the index fingers reach for G and H, and F and J have the bumps.
+func _home_row_guide(top: float) -> Control:
+	var box := Control.new()
+	Ui.anchor(box, 0.5, 0.0, 0.5, 0.0, -460, top, 460, top + 230)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var cap: float = 80.0
+	var gap: float = 8.0
+	var start: float = 460.0 - (cap * 10.0 + gap * 9.0) * 0.5
+	for lane: int in KeyMap.COUNT:
+		var reach: bool = KeyMap.REACH.has(lane)
+		var key := Ui.card(not reach, Ui.ACCENT if not reach else Color(1, 1, 1, 0.2))
+		var x: float = start + lane * (cap + gap)
+		Ui.anchor(key, 0.0, 0.0, 0.0, 0.0, x, 40, x + cap, 40 + cap)
+		var letter := Ui.label(KeyMap.label_for(lane), 40, Ui.TEXT if not reach else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+		Ui.anchor(letter, 0.0, 0.0, 1.0, 1.0, 0, 12, 0, -10, HORIZONTAL_ALIGNMENT_CENTER)
+		key.add_child(letter)
+		if KeyMap.HOMING.has(lane):
+			var bump := ColorRect.new()
+			bump.color = Ui.ACCENT
+			Ui.anchor(bump, 0.5, 1.0, 0.5, 1.0, -14, -14, 14, -10)
+			key.add_child(bump)
+		box.add_child(key)
+	var left := Ui.label("LEFT HAND RESTS HERE", 20, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(left, 0.0, 0.0, 0.0, 0.0, start, 4, start + cap * 4 + gap * 3, 34, HORIZONTAL_ALIGNMENT_CENTER)
+	box.add_child(left)
+	var right_x: float = start + 6 * (cap + gap)
+	var right := Ui.label("RIGHT HAND RESTS HERE", 20, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(right, 0.0, 0.0, 0.0, 0.0, right_x, 4, right_x + cap * 4 + gap * 3, 34, HORIZONTAL_ALIGNMENT_CENTER)
+	box.add_child(right)
+	var note := Ui.label("Index fingers reach for G and H. Easy never uses them. Your hands stay put for every song.", 24, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(note, 0.0, 0.0, 1.0, 0.0, -100, 140, 100, 176, HORIZONTAL_ALIGNMENT_CENTER)
+	box.add_child(note)
+	var sharps := Ui.label("On Normal, sharps arrive in orange: play them on the row above, W E R T Y U I O P, between the home keys.", 24, Color(1.0, 0.62, 0.25), HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(sharps, 0.0, 0.0, 1.0, 0.0, -140, 178, 140, 214, HORIZONTAL_ALIGNMENT_CENTER)
+	box.add_child(sharps)
+	return box
 
-func _show_map() -> void:
+
+# ---------------------------------------------------------------- the route
+
+func _select_song_id(song_id: String) -> void:
+	var song: Dictionary = SongLibrary.find(song_id)
+	if song.is_empty():
+		return
+	_region_index = maxi(0, _region_ids().find(song["theme"]))
+	_song_choice[song["theme"]] = song_id
+
+
+func _selected_index() -> int:
+	var chosen: String = str(_song_choice.get(_regions[_region_index]["id"], ""))
+	for i: int in _songs.size():
+		if _songs[i]["id"] == chosen:
+			return i
+	return 0
+
+
+func _choose_song(index: int) -> void:
+	if _songs.is_empty():
+		return
+	_song_choice[_regions[_region_index]["id"]] = _songs[clampi(index, 0, _songs.size() - 1)]["id"]
+
+
+func _show_route(message: String = "") -> void:
 	_end_session()
 	_clear_ui()
-	_screen = Screen.MAP
+	_screen = Screen.ROUTE
 	var region: Dictionary = _regions[_region_index]
+	var accent: Color = _accent(region)
+	var unlocked: bool = _region_unlocked(_region_index)
 	_show_world(region["id"])
 	_ambient.volume_db = -9.0
-	_ui.add_child(Ui.dim_panel(0.3))
-	var heading := Ui.label("THE ROUTE", 30, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 40, 0, 80, HORIZONTAL_ALIGNMENT_CENTER)
-	_ui.add_child(heading)
+	_songs = SongLibrary.in_region(region["id"])
+	_ui.add_child(Ui.dim_panel(0.4))
+
+	# Regions along the top. The world behind always shows the selected one.
 	var count: int = _regions.size()
-	var card_w: float = 270.0
-	var gap: float = 22.0
-	var total: float = count * card_w + (count - 1) * gap
+	var tab_w: float = 270.0
+	var gap: float = 14.0
+	var left: float = -(count * tab_w + (count - 1) * gap) * 0.5
 	for i: int in count:
-		_ui.add_child(_region_card(i, -total * 0.5 + i * (card_w + gap), card_w))
-	var unlocked: bool = _region_unlocked(_region_index)
-	var accent: Color = Ui.color_from_hex(str(region.get("accent", "#3fd8ff")))
-	var name := Ui.label(str(region["name"]).to_upper(), 64, accent, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(name, 0.0, 0.62, 1.0, 0.62, 0, 0, 0, 80, HORIZONTAL_ALIGNMENT_CENTER)
-	_ui.add_child(name)
-	var blurb_text: String = str(region.get("blurb", ""))
+		_ui.add_child(_region_tab(i, left + i * (tab_w + gap), tab_w))
+	var about_text: String = "%s   ·   %s" % [region.get("genres", ""), region.get("blurb", "")]
 	if not unlocked:
-		blurb_text = "Clear any song in %s to open this road." % _regions[_region_index - 1]["name"]
-	var blurb := Ui.label(blurb_text, 28, Ui.TEXT if unlocked else Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(blurb, 0.0, 0.62, 1.0, 0.62, 0, 84, 0, 124, HORIZONTAL_ALIGNMENT_CENTER)
-	_ui.add_child(blurb)
-	_hint("← →  choose region        ENTER  songs        L  load your own song        ESC  back")
+		about_text = "Locked: clear any song in %s to open this road." % _regions[_region_index - 1]["name"]
+	var about := Ui.label(about_text, 24, Ui.TEXT if unlocked else Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(about, 0.0, 0.0, 1.0, 0.0, 0, 128, 0, 160, HORIZONTAL_ALIGNMENT_CENTER)
+	_ui.add_child(about)
+
+	# The region's songs on the left, the selected song in detail on the right.
+	var selected: int = _selected_index()
+	var first: int = clampi(selected - SONG_ROWS / 2, 0, maxi(0, _songs.size() - SONG_ROWS))
+	var shown: int = 0
+	for row: int in range(first, mini(first + SONG_ROWS, _songs.size())):
+		_ui.add_child(_song_row(row, row == selected, LIST_TOP + shown * (ROW_HEIGHT + 8.0), accent, unlocked))
+		shown += 1
+	if _songs.is_empty():
+		var empty := Ui.label("No songs here yet.", 30, Ui.TEXT)
+		Ui.anchor(empty, 0.5, 0.0, 0.5, 0.0, -720, LIST_TOP + 12, 0, LIST_TOP + 56)
+		_ui.add_child(empty)
+	var load_y: float = LIST_TOP + maxi(shown, 1) * (ROW_HEIGHT + 8.0) + 6.0
+	var load_row := Ui.card(false, accent)
+	Ui.anchor(load_row, 0.5, 0.0, 0.5, 0.0, -720, load_y, -80, load_y + 54)
+	var load_label := Ui.label("+  Load your own song (L)", 26, Ui.ACCENT)
+	Ui.anchor(load_label, 0.0, 0.0, 1.0, 1.0, 22, 10, 0, -8)
+	load_row.add_child(load_label)
+	_on_click(load_row, _open_file_picker)
+	_ui.add_child(load_row)
+	if not _songs.is_empty():
+		_ui.add_child(_song_detail(_songs[selected], accent, unlocked))
+	_hint("← →  region      ↑ ↓  song      TAB  easy / normal      ENTER  drive      L  load your song      ESC  title")
+	if not message.is_empty():
+		_show_toast(message)
 
 
-func _region_card(index: int, x: float, width: float) -> Control:
+func _region_tab(index: int, x: float, width: float) -> Control:
 	var region: Dictionary = _regions[index]
 	var selected: bool = index == _region_index
 	var unlocked: bool = _region_unlocked(index)
-	var accent: Color = Ui.color_from_hex(str(region.get("accent", "#3fd8ff")))
-	var card := Ui.card(selected, accent)
-	var top: float = 110.0 if selected else 126.0
-	Ui.anchor(card, 0.5, 0.0, 0.5, 0.0, x, top, x + width, top + (300.0 if selected else 268.0))
-	var logo_path: String = "res://assets/themes/%s/textures/region_logo.png" % region["id"]
-	if ResourceLoader.exists(logo_path):
-		var logo := Ui.image(logo_path)
-		Ui.anchor(logo, 0.0, 0.0, 1.0, 0.0, 10, 16, -10, 96)
-		logo.modulate.a = 1.0 if unlocked else 0.35
-		card.add_child(logo)
-	var genres := Ui.label(str(region.get("genres", "")), 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	genres.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	Ui.anchor(genres, 0.0, 0.0, 1.0, 0.0, 12, 104, -12, 160, HORIZONTAL_ALIGNMENT_CENTER)
-	card.add_child(genres)
+	var accent: Color = _accent(region)
+	var tab := Ui.card(selected, accent)
+	Ui.anchor(tab, 0.5, 0.0, 0.5, 0.0, x, 28, x + width, 112)
+	var name := Ui.label("%d  %s" % [index + 1, str(region["name"]).to_upper()], 26, accent if unlocked else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(name, 0.0, 0.0, 1.0, 0.0, 6, 10, -6, 46, HORIZONTAL_ALIGNMENT_CENTER)
+	tab.add_child(name)
 	var songs: Array[Dictionary] = SongLibrary.in_region(region["id"])
 	var cleared: int = 0
 	for song: Dictionary in songs:
 		if _save.cleared(song["id"]):
 			cleared += 1
-	var status_text: String = "LOCKED" if not unlocked else "%d song%s   %d cleared" % [songs.size(), "" if songs.size() == 1 else "s", cleared]
-	var status := Ui.label(status_text, 22, Ui.WARM if not unlocked else Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(status, 0.0, 1.0, 1.0, 1.0, 0, -62, 0, -28, HORIZONTAL_ALIGNMENT_CENTER)
-	card.add_child(status)
-	var order := Ui.label(str(index + 1), 22, accent, HORIZONTAL_ALIGNMENT_LEFT)
-	Ui.anchor(order, 0.0, 0.0, 0.0, 0.0, 14, 8, 60, 34)
-	card.add_child(order)
-	return card
-
-
-func _map_key(code: Key) -> void:
-	match code:
-		KEY_LEFT, KEY_A:
-			_region_index = wrapi(_region_index - 1, 0, _regions.size())
+	var status_text: String = "LOCKED" if not unlocked else "%d of %d cleared" % [cleared, songs.size()]
+	var status := Ui.label(status_text, 20, Ui.WARM if not unlocked else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(status, 0.0, 0.0, 1.0, 0.0, 6, 46, -6, 74, HORIZONTAL_ALIGNMENT_CENTER)
+	tab.add_child(status)
+	_on_click(tab, func() -> void:
+		if index != _region_index:
+			_region_index = index
 			_click()
-			_show_map()
-		KEY_RIGHT, KEY_D:
-			_region_index = wrapi(_region_index + 1, 0, _regions.size())
-			_click()
-			_show_map()
-		KEY_ENTER, KEY_SPACE:
-			if _region_unlocked(_region_index):
-				_click()
-				_song_index = 0
-				_show_songs()
-		KEY_L:
-			_click()
-			_open_file_picker()
-		KEY_ESCAPE:
-			_click()
-			_show_title()
+			_show_route())
+	return tab
 
 
-# ---------------------------------------------------------------- a region's songs
-
-func _show_songs(select_id: String = "") -> void:
-	_end_session()
-	_clear_ui()
-	_screen = Screen.SONGS
-	var region: Dictionary = _regions[_region_index]
-	_show_world(region["id"])
-	_ambient.volume_db = -9.0
-	_songs = SongLibrary.in_region(region["id"])
-	if not select_id.is_empty():
-		for i: int in _songs.size():
-			if _songs[i]["id"] == select_id:
-				_song_index = i
-	_song_index = clampi(_song_index, 0, maxi(0, _songs.size() - 1))
-	_ui.add_child(Ui.dim_panel(0.42))
-	var accent: Color = Ui.color_from_hex(str(region.get("accent", "#3fd8ff")))
-	var logo_path: String = "res://assets/themes/%s/textures/region_logo.png" % region["id"]
-	if ResourceLoader.exists(logo_path):
-		var logo := Ui.image(logo_path)
-		Ui.anchor(logo, 0.5, 0.0, 0.5, 0.0, -300, 20, 300, 130)
-		_ui.add_child(logo)
-	var level := Ui.label("◀  %s  ▶" % _difficulty.to_upper(), 30, accent, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(level, 0.0, 0.0, 1.0, 0.0, 0, 136, 0, 176, HORIZONTAL_ALIGNMENT_CENTER)
-	_ui.add_child(level)
-	if _songs.is_empty():
-		var empty := Ui.label("No songs here yet. Press L to load one of yours.", 32, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
-		Ui.anchor(empty, 0.0, 0.4, 1.0, 0.4, 0, 0, 0, 60, HORIZONTAL_ALIGNMENT_CENTER)
-		_ui.add_child(empty)
-	var first: int = clampi(_song_index - SONG_ROWS / 2, 0, maxi(0, _songs.size() - SONG_ROWS))
-	for row: int in range(first, mini(first + SONG_ROWS, _songs.size())):
-		_ui.add_child(_song_row(_songs[row], row == _song_index, 196.0 + float(row - first) * 76.0, accent))
-	_hint("↑ ↓  song     ← →  difficulty     ENTER  drive     L  load your own song     X  remove yours     ESC  map")
-
-
-func _song_row(song: Dictionary, selected: bool, y: float, accent: Color) -> Control:
+func _song_row(index: int, selected: bool, y: float, accent: Color, unlocked: bool) -> Control:
+	var song: Dictionary = _songs[index]
 	var row := Ui.card(selected, accent)
-	Ui.anchor(row, 0.5, 0.0, 0.5, 0.0, -560, y, 560, y + 66)
-	var title := Ui.label(str(song["title"]), 32, Ui.TEXT)
-	Ui.anchor(title, 0.0, 0.0, 0.62, 1.0, 24, 10, 0, -10)
+	Ui.anchor(row, 0.5, 0.0, 0.5, 0.0, -720, y, -80, y + ROW_HEIGHT)
+	if not unlocked:
+		row.modulate.a = 0.55
+	var title := Ui.label(str(song["title"]), 28, Ui.TEXT)
+	Ui.anchor(title, 0.0, 0.0, 0.72, 1.0, 22, 6, 0, -6)
 	title.clip_text = true
 	row.add_child(title)
 	if song["source"] == "imported":
-		# Title moves up to make room for the tag underneath it.
-		title.add_theme_font_size_override("font_size", 28)
-		Ui.anchor(title, 0.0, 0.0, 0.62, 1.0, 24, 2, 0, -24)
-		var tag := Ui.label("YOUR SONG", 17, Ui.WARM)
-		Ui.anchor(tag, 0.0, 1.0, 0.0, 1.0, 26, -26, 200, -4)
+		Ui.anchor(title, 0.0, 0.0, 0.72, 1.0, 22, 0, 0, -20)
+		var tag := Ui.label("YOUR SONG", 16, Ui.WARM)
+		Ui.anchor(tag, 0.0, 1.0, 0.0, 1.0, 24, -24, 200, -2)
 		row.add_child(tag)
-	var length: int = int(round(float(song["duration"])))
-	var info := Ui.label("%d BPM   %d:%02d" % [int(round(float(song["bpm"]))), length / 60, length % 60], 22, Ui.MUTED)
-	Ui.anchor(info, 0.6, 0.0, 0.78, 1.0, 0, 18, 0, -14)
-	row.add_child(info)
 	var bests: Array[String] = []
 	for level: String in Chart.DIFFICULTIES:
-		var best: Dictionary = _save.best_for(song["id"], level)
-		bests.append("%s %s" % [level.left(1).to_upper(), best.get("grade", "–")])
-	var grades := Ui.label("   ".join(bests), 26, Ui.WARM, HORIZONTAL_ALIGNMENT_RIGHT)
-	Ui.anchor(grades, 0.78, 0.0, 1.0, 1.0, 0, 14, -24, -14, HORIZONTAL_ALIGNMENT_RIGHT)
+		bests.append(str(_save.best_for(song["id"], level).get("grade", "·")))
+	var grades := Ui.label("  ".join(bests), 26, Ui.WARM, HORIZONTAL_ALIGNMENT_RIGHT)
+	Ui.anchor(grades, 0.72, 0.0, 1.0, 1.0, 0, 12, -20, -10, HORIZONTAL_ALIGNMENT_RIGHT)
 	row.add_child(grades)
 	if selected and _remove_armed_until > Time.get_ticks_msec():
-		title.text = "Press X again to move this song to the Trash"
+		title.text = "Press X again to move it to the Trash"
 		title.add_theme_color_override("font_color", Ui.WARM)
+	_on_click(row, func() -> void:
+		if selected:
+			_drive_selected()
+		else:
+			_choose_song(index)
+			_click()
+			_show_route())
 	return row
 
 
-func _songs_key(code: Key) -> void:
+func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
+	var card := Ui.card(true, accent)
+	Ui.anchor(card, 0.5, 0.0, 0.5, 0.0, -50, LIST_TOP, 720, LIST_TOP + 470)
+	var title := Ui.label(str(song["title"]), 38, Ui.TEXT)
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	Ui.anchor(title, 0.0, 0.0, 1.0, 0.0, 28, 18, -28, 104)
+	card.add_child(title)
+	var length: int = int(round(float(song["duration"])))
+	var facts: String = "%d BPM   ·   %d:%02d" % [int(round(float(song["bpm"]))), length / 60, length % 60]
+	if song["source"] == "imported":
+		facts += "   ·   your song"
+	var info := Ui.label(facts, 24, Ui.MUTED)
+	Ui.anchor(info, 0.0, 0.0, 1.0, 0.0, 28, 108, -28, 140)
+	card.add_child(info)
+
+	# Easy and Normal side by side; TAB or a click switches.
+	var meta: Dictionary = Chart.read_meta(song["path"])
+	var levels: Dictionary = meta.get("difficulties", {})
+	for i: int in Chart.DIFFICULTIES.size():
+		var level: String = Chart.DIFFICULTIES[i]
+		var on: bool = level == _difficulty
+		var chip := Ui.card(on, accent)
+		var x: float = 28.0 + i * 352.0
+		Ui.anchor(chip, 0.0, 0.0, 0.0, 0.0, x, 158, x + 336, 300)
+		var notes: Array = levels.get(level, [])
+		var holds: int = 0
+		var reach: bool = false
+		var sharps: int = 0
+		for n: Dictionary in notes:
+			if float(n["d"]) >= Chart.HOLD_MIN_SECONDS:
+				holds += 1
+			if int(n.get("s", 0)) == 1:
+				sharps += 1
+			elif KeyMap.REACH.has(int(n.get("l", 0))):
+				reach = true
+		var head := Ui.label(level.to_upper(), 28, accent if on else Ui.MUTED)
+		Ui.anchor(head, 0.0, 0.0, 1.0, 0.0, 18, 10, -18, 46)
+		chip.add_child(head)
+		var best: Dictionary = _save.best_for(song["id"], level)
+		var best_text: String = "Best  %s   %d" % [best["grade"], int(best["score"])] if not best.is_empty() else "Not driven yet"
+		var best_label := Ui.label(best_text, 24, Ui.WARM if not best.is_empty() else Ui.MUTED)
+		Ui.anchor(best_label, 0.0, 0.0, 1.0, 0.0, 18, 48, -18, 80)
+		chip.add_child(best_label)
+		var shape := Ui.label("%d notes, %d holds" % [notes.size(), holds], 22, Ui.TEXT)
+		Ui.anchor(shape, 0.0, 0.0, 1.0, 0.0, 18, 82, -18, 110)
+		chip.add_child(shape)
+		var keys_text: String = "8 resting keys"
+		if sharps > 0:
+			keys_text = "10 keys + %d sharps on the top row" % sharps
+		elif reach:
+			keys_text = "10 keys: adds G and H"
+		var keys := Ui.label(keys_text, 20, Color(1.0, 0.62, 0.25) if sharps > 0 else Ui.MUTED)
+		Ui.anchor(keys, 0.0, 0.0, 1.0, 0.0, 18, 108, -18, 134)
+		chip.add_child(keys)
+		_on_click(chip, func() -> void:
+			if _difficulty != level:
+				_difficulty = level
+				_click()
+				_show_route())
+		card.add_child(chip)
+
+	var drive := Ui.card(unlocked, accent)
+	Ui.anchor(drive, 0.0, 0.0, 1.0, 0.0, 28, 330, -28, 410)
+	var drive_text: String = "ENTER   DRIVE" if unlocked else "LOCKED"
+	var drive_label := Ui.label(drive_text, 38, accent if unlocked else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(drive_label, 0.0, 0.0, 1.0, 1.0, 0, 14, 0, -12, HORIZONTAL_ALIGNMENT_CENTER)
+	drive.add_child(drive_label)
+	_on_click(drive, _drive_selected)
+	card.add_child(drive)
+	if song["source"] == "imported":
+		var remove := Ui.label("X  remove this song", 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+		Ui.anchor(remove, 0.0, 0.0, 1.0, 0.0, 0, 420, 0, 450, HORIZONTAL_ALIGNMENT_CENTER)
+		card.add_child(remove)
+	return card
+
+
+func _route_key(code: Key) -> void:
 	match code:
-		KEY_UP, KEY_W:
-			_song_index = maxi(0, _song_index - 1)
+		KEY_LEFT:
+			_region_index = wrapi(_region_index - 1, 0, _regions.size())
 			_remove_armed_until = 0
 			_click()
-			_show_songs()
-		KEY_DOWN, KEY_S:
-			_song_index = mini(maxi(0, _songs.size() - 1), _song_index + 1)
+			_show_route()
+		KEY_RIGHT:
+			_region_index = wrapi(_region_index + 1, 0, _regions.size())
 			_remove_armed_until = 0
 			_click()
-			_show_songs()
-		KEY_LEFT, KEY_RIGHT, KEY_TAB, KEY_A, KEY_D:
+			_show_route()
+		KEY_UP:
+			_choose_song(_selected_index() - 1)
+			_remove_armed_until = 0
+			_click()
+			_show_route()
+		KEY_DOWN:
+			_choose_song(_selected_index() + 1)
+			_remove_armed_until = 0
+			_click()
+			_show_route()
+		KEY_TAB:
 			_difficulty = "easy" if _difficulty == "normal" else "normal"
 			_click()
-			_show_songs()
-		KEY_ENTER, KEY_SPACE:
-			if not _songs.is_empty():
-				_click()
-				_start_run(_songs[_song_index])
+			_show_route()
+		KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
+			_drive_selected()
 		KEY_L:
 			_click()
 			_open_file_picker()
@@ -434,23 +560,32 @@ func _songs_key(code: Key) -> void:
 			_try_remove()
 		KEY_ESCAPE:
 			_click()
-			_show_map()
+			_show_title()
+
+
+func _drive_selected() -> void:
+	if _songs.is_empty():
+		return
+	if not _region_unlocked(_region_index):
+		_show_toast("Clear any song in %s first to open %s." % [_regions[_region_index - 1]["name"], _regions[_region_index]["name"]])
+		return
+	_click()
+	_start_run(_songs[_selected_index()])
 
 
 ## Removing one of your songs takes a second press, and goes to the Trash so it can be restored.
 func _try_remove() -> void:
-	if _songs.is_empty() or _songs[_song_index]["source"] != "imported":
+	if _songs.is_empty() or _songs[_selected_index()]["source"] != "imported":
 		return
 	if _remove_armed_until > Time.get_ticks_msec():
 		_remove_armed_until = 0
-		var title: String = _songs[_song_index]["title"]
-		var err: Error = SongLibrary.remove_import(_songs[_song_index])
-		_song_index = maxi(0, _song_index - 1)
-		_show_songs()
-		_show_toast("Moved \"%s\" to the Trash" % title if err == OK else "Could not remove that song")
+		var song: Dictionary = _songs[_selected_index()]
+		var err: Error = SongLibrary.remove_import(song)
+		_choose_song(_selected_index() - 1)
+		_show_route("Moved \"%s\" to the Trash" % song["title"] if err == OK else "Could not remove that song")
 	else:
 		_remove_armed_until = Time.get_ticks_msec() + 3000
-		_show_songs()
+		_show_route()
 
 
 # ---------------------------------------------------------------- loading your own song
@@ -555,7 +690,7 @@ func _begin_import(file: String, title: String, region: String) -> void:
 
 
 func _on_import_progress(fraction: float, message: String) -> void:
-	if _screen != Screen.IMPORT or _import_bar == null:
+	if _screen != Screen.IMPORT or _import_bar == null or not is_instance_valid(_import_bar):
 		return
 	_import_bar.anchor_right = clampf(fraction, 0.0, 1.0)
 	_import_status.text = message
@@ -563,12 +698,10 @@ func _on_import_progress(fraction: float, message: String) -> void:
 
 func _on_import_finished(chart_path: String) -> void:
 	var meta: Dictionary = Chart.read_meta(chart_path)
-	for i: int in _regions.size():
-		if _regions[i]["id"] == meta.get("theme", ""):
-			_region_index = i
-	_show_songs(str(meta.get("id", "")))
+	_select_song_id(str(meta.get("id", "")))
 	var levels: Dictionary = meta.get("difficulties", {})
-	_show_toast("Ready: %d notes on Normal, %d on Easy" % [(levels.get("normal", []) as Array).size(), (levels.get("easy", []) as Array).size()])
+	_show_route("Ready: \"%s\", %d notes on Normal, %d on Easy" % [meta.get("title", ""),
+		(levels.get("normal", []) as Array).size(), (levels.get("easy", []) as Array).size()])
 	print("IMPORTED ", chart_path)
 	if _options.has("import-file"):
 		await get_tree().create_timer(1.0).timeout
@@ -603,6 +736,7 @@ func _show_import_message(text: String) -> void:
 func _start_run(song: Dictionary) -> void:
 	assert(not song.is_empty(), "Unknown song")
 	_current_song = song
+	_song_choice[song["theme"]] = song["id"]
 	_end_session()
 	_clear_ui()
 	_screen = Screen.PLAYING
@@ -613,7 +747,7 @@ func _start_run(song: Dictionary) -> void:
 	_session = PlaySession.new()
 	add_child(_session)
 	_session.finished.connect(_on_run_finished)
-	_session.quit_to_menu.connect(_show_songs)
+	_session.quit_to_menu.connect(_show_route)
 	_session.restart_requested.connect(func() -> void: _start_run(_current_song))
 	var options := {"offset": _save.calibration}
 	if _options.has("bot"):
@@ -621,6 +755,23 @@ func _start_run(song: Dictionary) -> void:
 	if _options.has("fast"):
 		options["manual"] = true
 	_session.begin(chart, highway, _stage.world, _sfx, options)
+
+
+## The next song in this region, or the first of the next region once it is open.
+func _drive_next() -> void:
+	var songs: Array[Dictionary] = SongLibrary.in_region(_current_song["theme"])
+	var at: int = songs.map(func(s: Dictionary) -> String: return s["id"]).find(_current_song["id"])
+	if at >= 0 and at + 1 < songs.size():
+		_start_run(songs[at + 1])
+		return
+	var region_at: int = _region_ids().find(_current_song["theme"])
+	if region_at + 1 < _regions.size() and _region_unlocked(region_at + 1):
+		var next_songs: Array[Dictionary] = SongLibrary.in_region(_regions[region_at + 1]["id"])
+		if not next_songs.is_empty():
+			_region_index = region_at + 1
+			_start_run(next_songs[0])
+			return
+	_show_route("That was the last open song here. Pick another on the route.")
 
 
 func _on_run_finished(result: Dictionary) -> void:
@@ -696,12 +847,12 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> v
 	if new_best:
 		news.append("NEW BEST")
 	if opened_region:
-		news.append("NEW ROAD OPEN ON THE MAP")
+		news.append("NEW ROAD OPEN ON THE ROUTE")
 	if not news.is_empty():
 		var banner := Ui.label("     ".join(news), 34, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 		Ui.anchor(banner, 0.0, 0.0, 1.0, 0.0, 0, 566, 0, 614, HORIZONTAL_ALIGNMENT_CENTER)
 		_ui.add_child(banner)
-	_hint("SPACE  drive again        ESC  songs")
+	_hint("ENTER  next song        SPACE  drive again        ESC  route")
 
 
 # ---------------------------------------------------------------- timing check

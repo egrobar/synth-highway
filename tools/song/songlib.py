@@ -7,7 +7,8 @@ follows one set of playability rules.
 
 Chart file format (game/data/songs/<id>.json, or user://songs/<id>/chart.json):
   id, title, theme, bpm, beats_per_bar, beat_offset, duration, backing, lead,
-  sections, source ("builtin" or "imported"), difficulties {easy, normal}, and
+  sections, source ("builtin" or "imported"), lanes ("home_row"), difficulties {easy, normal}
+  (each note {t, d, p, l}: seconds, seconds, MIDI pitch, home-row lane 0-9), and
   notes (a copy of normal, for older readers).
 Score event format (for tools/song/render_score.scd): [time, instrument, midi, seconds, amp, pan]
 """
@@ -84,12 +85,170 @@ def fold_to_lanes(notes: list[dict], shift: int = 0) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- home-row lanes
+#
+# Every song is played on the same ten keys, the home row: A S D F G H J K L ;.
+# Fingers rest on A S D F and J K L ; and the index fingers reach G and H, so
+# hands never move between songs. A chart note's "l" is its lane, 0 (A) to 9 (;).
+# Lanes follow the melody's shape: each step of the scale is one lane, higher
+# notes further right. Easy uses only the eight resting keys (no G or H). On
+# Normal, notes outside the key are sharps ("s": 1), played on the top-row key
+# between two home keys, like a piano's black keys: W E R T Y U I O P.
+NORMAL_LANES = list(range(10))
+EASY_LANES = [0, 1, 2, 3, 6, 7, 8, 9]
+MAJOR_SCALE = [0, 2, 4, 5, 7, 9, 11]
+MINOR_SCALE = [0, 2, 3, 5, 7, 8, 10]
+_KK_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+_KK_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+
+
+def melody_key(notes: list[dict]) -> tuple[int, list[int]]:
+    """(tonic pitch class, scale) from the melody alone, weighting notes by length."""
+    weights = [0.0] * 12
+    for n in notes:
+        weights[n["p"] % 12] += n["d"]
+
+    def corr(profile: list[float], tonic: int) -> float:
+        rotated = [profile[(i - tonic) % 12] for i in range(12)]
+        ma, mb = sum(rotated) / 12, sum(weights) / 12
+        num = sum((a - ma) * (b - mb) for a, b in zip(rotated, weights))
+        den = (sum((a - ma) ** 2 for a in rotated) * sum((b - mb) ** 2 for b in weights)) ** 0.5
+        return num / den if den else 0.0
+
+    total = sum(weights) or 1.0
+
+    def outside(tonic: int, scale: list[int]) -> float:
+        return sum(w for pc, w in enumerate(weights) if (pc - tonic) % 12 not in scale) / total
+
+    # The key that leaves the least of the melody out of key wins (so a tune on white keys
+    # only never sprouts sharps); the profile correlation only breaks near-ties.
+    candidates = [(outside(t, sc), -corr(prof, t), t, sc)
+                  for t in range(12) for prof, sc in ((_KK_MAJOR, MAJOR_SCALE), (_KK_MINOR, MINOR_SCALE))]
+    least = min(c[0] for c in candidates)
+    chosen = min((c for c in candidates if c[0] <= least + 0.02), key=lambda c: c[1])
+    return chosen[2], chosen[3]
+
+
+def scale_positions(notes: list[dict]) -> list[tuple[int, bool]]:
+    """Each note as (scale step, out of key). A note outside the key sits between its
+    step and the next one up, the way a black key sits between two white keys."""
+    tonic, scale = melody_key(notes)
+    positions: list[tuple[int, bool]] = []
+    for n in notes:
+        octave, pc = divmod(n["p"] - tonic, 12)
+        if pc in scale:
+            positions.append((octave * 7 + scale.index(pc), False))
+        else:
+            positions.append((octave * 7 + max(i for i, s in enumerate(scale) if s < pc), True))
+    return positions
+
+
+def snapped_steps(notes: list[dict], positions: list[tuple[int, bool]]) -> list[int]:
+    """For layouts without sharps: an out-of-key note goes to the neighbouring step that
+    keeps the melody moving the way it moved, so a turn like E-D#-E stays a turn."""
+    steps: list[int] = []
+    prev_pitch, prev_step = None, None
+    for n, (below, out_of_key) in zip(notes, positions):
+        step = below
+        if out_of_key:
+            above = below + 1
+            if prev_pitch is None or n["p"] == prev_pitch:
+                step = prev_step if prev_step in (below, above) else above
+            elif n["p"] > prev_pitch:
+                step = above if above > prev_step or below <= prev_step else below
+            else:
+                step = below if below < prev_step or above >= prev_step else above
+        steps.append(step)
+        prev_pitch, prev_step = n["p"], step
+    return steps
+
+
+def _best_window(values: list[float], width: int, fits) -> int:
+    lo, hi = int(min(values)), int(max(values))
+    best_base, best_fit, best_gap = lo, -1, 0.0
+    mean = sum(values) / len(values)
+    for base in range(lo - width, hi + 1):
+        fit = sum(1 for v in values if fits(v, base))
+        # Prefer the window that holds the most notes, then the one centred on the melody.
+        gap = abs((base + (width - 1) / 2) - mean)
+        if fit > best_fit or (fit == best_fit and gap < best_gap):
+            best_base, best_fit, best_gap = base, fit, gap
+    return best_base
+
+
+def assign_lanes(notes: list[dict], lanes: list[int]) -> tuple[list[dict], int]:
+    """Adds "l" to every note, with no sharps. The window of len(lanes) scale steps that
+    holds the most notes is chosen; notes outside it fold in by octaves.
+    Returns (notes, folded count)."""
+    if not notes:
+        return notes, 0
+    steps = snapped_steps(notes, scale_positions(notes))
+    width = len(lanes)
+    base = _best_window([float(s) for s in steps], width, lambda v, b: b <= v < b + width)
+    out, folded = [], 0
+    for n, s in zip(notes, steps):
+        i = s - base
+        if not 0 <= i < width:
+            folded += 1
+            while i < 0:
+                i += 7
+            while i >= width:
+                i -= 7
+        out.append({**n, "l": lanes[max(0, min(width - 1, i))]})
+    return out, folded
+
+
+def assign_lanes_with_sharps(notes: list[dict]) -> tuple[list[dict], int, int]:
+    """All ten home keys, and out-of-key notes kept as sharps: "l" is the home key just
+    below and "s": 1 marks it, played on the top-row key between that home key and the
+    next (W between A and S, E between S and D, ... P between L and ;).
+    Returns (notes, folded count, sharp count)."""
+    positions = scale_positions(notes)
+    width = 10
+    values = [s + (0.5 if sharp else 0.0) for s, sharp in positions]
+    # A sharp needs both neighbours on the board, so it fits only up to the second-last lane.
+    base = _best_window(values, width, lambda v, b: b <= v <= b + width - 1 - (0.5 if v % 1 else 0))
+    out, folded, sharps = [], 0, 0
+    for n, (s, sharp) in zip(notes, positions):
+        i = s - base
+        top = width - 2 if sharp else width - 1
+        if not 0 <= i <= top:
+            folded += 1
+            while i < 0:
+                i += 7
+            while i > top:
+                i -= 7
+        note = {**n, "l": max(0, min(top, i))}
+        if sharp:
+            note["s"] = 1
+            sharps += 1
+        out.append(note)
+    return out, folded, sharps
+
+
 def write_chart(path: pathlib.Path, meta: dict, normal: list[dict]) -> dict:
     beat = 60.0 / meta["bpm"]
     # Easy leaves at least a beat and a quarter between notes (never under 0.5 s),
     # so even a song of plain quarter notes thins out noticeably.
     easy = easy_notes(normal, beat, meta.get("beat_offset", 0.0), spacing=max(0.5, beat * 1.25))
-    chart = {**meta, "difficulties": {"easy": easy, "normal": normal}, "notes": normal}
+    folded_normal = 0
+    if any(out_of_key for _, out_of_key in scale_positions(normal)):
+        # The melody leaves the key: Normal plays those notes as sharps on the top row.
+        normal, folded_normal, sharps = assign_lanes_with_sharps(normal)
+        print(f"   lanes: {sharps} sharps on the top row")
+    else:
+        # A melody that fits on the eight resting keys stays on them: G and H (index
+        # reaches) come in only when the tune needs more than eight scale steps.
+        resting, folded_resting = assign_lanes(normal, EASY_LANES)
+        if folded_resting == 0:
+            normal = resting
+        else:
+            normal, folded_normal = assign_lanes(normal, NORMAL_LANES)
+    # Easy never has sharps: out-of-key notes snap to a neighbouring resting key.
+    easy, _ = assign_lanes(easy, EASY_LANES)
+    if folded_normal:
+        print(f"   lanes: {folded_normal} of {len(normal)} notes folded by an octave to fit the home row")
+    chart = {**meta, "lanes": "home_row", "difficulties": {"easy": easy, "normal": normal}, "notes": normal}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(chart, indent=1))
     return chart

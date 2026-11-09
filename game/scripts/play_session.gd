@@ -54,6 +54,9 @@ var _fuel_bar: ColorRect
 var _progress_bar: ColorRect
 var _center_label: Label
 var _pause_panel: Control
+var _hands_cue: Label
+
+const HANDS_TEXT := "Hands on the home row:  A S D F      J K L ;"
 
 
 func begin(song: Chart, highway: Highway, world: ThemeWorld, sfx: Dictionary, options: Dictionary) -> void:
@@ -124,10 +127,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if _paused or _counting_in or _failed_at_usec >= 0:
 		return
-	var pitch: int = KeyMap.pitch_for(key.physical_keycode)
-	if pitch < 0:
+	var lane: int = KeyMap.lane_for(key.physical_keycode)
+	if lane < 0:
 		return
-	_key_event(pitch, key.physical_keycode, key.pressed)
+	_key_event(lane, key.physical_keycode, key.pressed)
 	get_viewport().set_input_as_handled()
 
 
@@ -157,16 +160,16 @@ func _handle_control_key(code: Key) -> bool:
 	return false
 
 
-func _key_event(pitch: int, source: Variant, pressed: bool) -> void:
+func _key_event(lane: int, source: Variant, pressed: bool) -> void:
 	var t: float = clock.now()
 	if pressed:
 		if _held_keys.has(source):
 			return
-		_held_keys[source] = pitch
-		_highway.set_key_pressed(pitch, true)
+		_held_keys[source] = lane
+		_highway.set_key_pressed(lane, true)
 		# Noodling during the intro is free. Only presses near the first note are judged.
 		if t >= _first_note_time - Judge.GOOD_WINDOW:
-			judge.press(pitch, source, t)
+			judge.press(lane, source, t)
 	else:
 		if not _held_keys.has(source):
 			return
@@ -237,7 +240,7 @@ func _show_count() -> void:
 
 
 func _on_note_hit(n: Chart.Note, verdict: String, _offset: float) -> void:
-	_highway.celebrate(n.p, verdict == "perfect")
+	_highway.celebrate(n.lane, verdict == "perfect")
 	_flash_judgement(verdict.to_upper(), Color(1.0, 0.93, 0.7) if verdict == "perfect" else Color(0.55, 0.95, 0.65))
 	if not n.is_hold:
 		_lead_open_until = maxf(_lead_open_until, n.end_time() + 0.05)
@@ -247,15 +250,15 @@ func _on_note_missed(_n: Chart.Note) -> void:
 	_flash_judgement("MISS", Color(1.0, 0.34, 0.46))
 
 
-func _on_wrong_key(pitch: int) -> void:
-	_highway.flash_wrong(pitch)
+func _on_wrong_key(lane: int) -> void:
+	_highway.flash_wrong(lane)
 	_play(_sfx, "wrong")
 
 
 func _on_hold_ended(n: Chart.Note, completed: bool) -> void:
 	if completed:
 		_lead_open_until = maxf(_lead_open_until, n.end_time() + 0.05)
-		_highway.celebrate(n.p, true)
+		_highway.celebrate(n.lane, true)
 		_flash_judgement("HELD", Color(0.75, 0.97, 1.0))
 		_play(_sfx, "held")
 	else:
@@ -362,8 +365,8 @@ func _build_bot(profile: String) -> void:
 					release = press + 0.08
 			"afk":
 				continue
-		_bot_actions.append([press, true, n.p])
-		_bot_actions.append([release, false, n.p])
+		_bot_actions.append([press, true, n.lane])
+		_bot_actions.append([release, false, n.lane])
 	_bot_actions.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
 
 
@@ -396,6 +399,9 @@ func _update_hud(now: float) -> void:
 	_fuel_bar.anchor_right = judge.fuel
 	_fuel_bar.color = Color(1.0, 0.3, 0.3) if judge.fuel < 0.3 else Color(1.0, 0.76, 0.32)
 	_progress_bar.anchor_right = clampf(now / chart.last_note_end(), 0.0, 1.0)
+	# The cue fades out just before the first note arrives.
+	if _hands_cue:
+		_hands_cue.modulate.a = clampf((_first_note_time - 0.6 - now) / 0.8, 0.0, 1.0)
 
 
 func _build_hud() -> void:
@@ -456,6 +462,14 @@ func _build_hud() -> void:
 	var paused := Ui.label("PAUSED", 74, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(paused, 0.0, 0.34, 1.0, 0.34, 0, 0, 0, 100, HORIZONTAL_ALIGNMENT_CENTER)
 	_pause_panel.add_child(paused)
-	var help := Ui.label("SPACE  resume     R  restart     BACKSPACE  menu", 26, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	var help := Ui.label("SPACE  resume     R  restart     BACKSPACE  route", 26, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(help, 0.0, 0.48, 1.0, 0.48, 0, 0, 0, 50, HORIZONTAL_ALIGNMENT_CENTER)
 	_pause_panel.add_child(help)
+	var hands := Ui.label(HANDS_TEXT, 26, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(hands, 0.0, 0.56, 1.0, 0.56, 0, 0, 0, 50, HORIZONTAL_ALIGNMENT_CENTER)
+	_pause_panel.add_child(hands)
+
+	# Shown through the lead-in, so every song starts from the same hand position.
+	_hands_cue = Ui.label(HANDS_TEXT, 30, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(_hands_cue, 0.0, 0.62, 1.0, 0.62, 0, 0, 0, 50, HORIZONTAL_ALIGNMENT_CENTER)
+	_hud.add_child(_hands_cue)

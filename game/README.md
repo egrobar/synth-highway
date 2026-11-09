@@ -20,10 +20,16 @@ Then:
 godot --path game          # or tools/godot.sh, which also serialises concurrent Godot runs
 ```
 
-Title → route map (← → choose a region) → its songs (↑ ↓ song, ← → difficulty, Enter to drive) →
-results. C on the title screen runs the timing check. In a drive, Space or Esc pauses; resuming counts
-in three beats. Melodies use the Q row: `Q W E R T Y U I O P [ ]` are the white keys from C4 to G5,
-with the sharps on the number row.
+Title → the route → drive → results. The route is one screen: regions along the top (← →), the
+region's songs below (↑ ↓), the selected song's details on the right, Tab for Easy or Normal, Enter to
+drive. Everything is clickable too. Results offer Enter for the next song, Space to drive again, Esc
+for the route. C on the title screen runs the timing check. In a drive, Space or Esc pauses; resuming
+counts in three beats.
+
+**Every song is played on the home row**: `A S D F G H J K L ;`. Fingers rest on A S D F and J K L ;,
+and the index fingers reach for G and H, so your hands never move between songs. Each note's lane
+follows the melody's shape, one scale step per lane. Easy uses only the eight resting keys; Normal
+adds G and H only when a melody needs more than eight steps.
 
 ## Load your own song
 

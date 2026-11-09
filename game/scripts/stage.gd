@@ -2,13 +2,14 @@ class_name Stage
 extends Node3D
 ## Owns the 3D scene: the region's world, the keyboard highway and the camera.
 ##
-## The road is as wide as the keyboard a song needs, so a world is rebuilt when
-## the region or the road width changes. Region worlds are scripts at
+## The road is as wide as the ten-lane home-row keyboard, the same for every song, so a
+## world is rebuilt only when the region changes. Region worlds are scripts at
 ## res://scripts/themes/<id>.gd extending ThemeWorld.
 
 const CAMERA_POSITION := Vector3(0.0, 8.8, 13.6)  # high enough that the hood frames the bottom edge
 const CAMERA_TARGET := Vector3(0.0, 1.0, -12.0)
-const MENU_HALF_WIDTH := 8.5
+## Menus and drives share one road width (the ten-lane keyboard), so the world is never rebuilt between them.
+const MENU_HALF_WIDTH := 8.0 + 1.7
 
 var highway: Highway
 var world: ThemeWorld

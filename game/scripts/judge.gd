@@ -26,7 +26,7 @@ const FUEL_ON_HOLD_DROP := -0.03
 
 signal note_hit(note: Chart.Note, verdict: String, offset: float)
 signal note_missed(note: Chart.Note)
-signal wrong_key(pitch: int)
+signal wrong_key(lane: int)
 signal hold_ended(note: Chart.Note, completed: bool)
 signal ran_out_of_fuel
 
@@ -65,14 +65,14 @@ func is_holding() -> bool:
 	return not _active_holds.is_empty()
 
 
-func press(pitch: int, source: Variant, t: float) -> void:
+func press(lane: int, source: Variant, t: float) -> void:
 	var best: Chart.Note = null
 	var best_offset: float = INF
 	for i: int in range(_first_open, notes.size()):
 		var n: Chart.Note = notes[i]
 		if n.t > t + GOOD_WINDOW:
 			break
-		if n.p != pitch or n.state != Chart.NoteState.PENDING:
+		if n.lane != lane or n.state != Chart.NoteState.PENDING:
 			continue
 		var offset: float = t - n.t
 		if absf(offset) <= GOOD_WINDOW and absf(offset) < absf(best_offset):
@@ -82,7 +82,7 @@ func press(pitch: int, source: Variant, t: float) -> void:
 		wrong_presses += 1
 		combo = 0
 		_add_fuel(FUEL_ON_WRONG)
-		wrong_key.emit(pitch)
+		wrong_key.emit(lane)
 		return
 	_register_hit(best, source, best_offset)
 

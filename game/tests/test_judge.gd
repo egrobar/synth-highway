@@ -23,6 +23,7 @@ func _init() -> void:
 	test_perfect_run_grades_s()
 	test_grade_reflects_dropped_holds()
 	test_manual_clock()
+	test_key_map()
 	print("%d checks, %d failures" % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -203,3 +204,16 @@ func test_manual_clock() -> void:
 	clock.resume()
 	clock.advance(0.5)
 	near(clock.now(), -1.0, "a resumed clock continues")
+
+
+func test_key_map() -> void:
+	check(KeyMap.lane_for(KEY_A) == 0 and KeyMap.lane_for(KEY_SEMICOLON) == 9, "home row is lanes 0-9")
+	check(KeyMap.lane_for(KEY_W) == 10 and KeyMap.lane_for(KEY_P) == 18, "top row W-P are the sharps 10-18")
+	check(KeyMap.lane_for(KEY_Q) == -1 and KeyMap.lane_for(KEY_Z) == -1, "keys outside the instrument play nothing")
+	check(KeyMap.key_for(12) == KEY_R and KeyMap.label_for(9) == ";", "lanes map back to their keys")
+	near(Highway.lane_x(10), (Highway.lane_x(0) + Highway.lane_x(1)) * 0.5, "a sharp sits between its two home lanes")
+	var j := judge_for([[1.0, 0.2, 12]])
+	j.press(2, "d", 1.0)
+	check(j.wrong_presses == 1 and j.hits == 0, "the home key under a sharp does not play the sharp")
+	j.press(12, "r", 1.0)
+	check(j.hits == 1, "the sharp's own key plays it")

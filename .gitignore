@@ -20,3 +20,15 @@ __pycache__/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Godot build (generated)
+game/.godot/
+tools/song/build/
+
+# Song importer environment (tools/setup_pipeline.sh)
+.venv-pipeline/
+
+# Generated audio: rebuild with tools/build_assets.sh (needs SuperCollider).
+# The scripts in tools/ are the source; the WAV renders are build output (~360 MB).
+game/assets/**/*.wav
+game/assets/**/*.wav.import

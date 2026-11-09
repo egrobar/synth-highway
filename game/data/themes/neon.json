@@ -1,0 +1,9 @@
+{
+ "id": "neon",
+ "name": "Neon Sprawl",
+ "genres": "Cyberpunk, synthwave, EDM",
+ "order": 2,
+ "lead": "sawlead",
+ "accent": "#ff4fc8",
+ "blurb": "A rain-slick skyway through the megacity, lit by a thousand signs."
+}

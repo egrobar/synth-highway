@@ -1,0 +1,9 @@
+{
+ "id": "mesa",
+ "name": "Red Mesa",
+ "genres": "Rock, metal, blues",
+ "order": 4,
+ "lead": "drive",
+ "accent": "#ff5a24",
+ "blurb": "Canyon blacktop past the red mesas, a storm grumbling on the horizon."
+}

@@ -5,6 +5,14 @@ extends Node
 ## Scored runs have no seek and no speed control. Keys are timed against the
 ## audio clock. A bot can stand in for the player using the same input path,
 ## either in real time against real audio or stepped on a manual clock.
+##
+## A practice run (options "practice", "speed") cannot fail, can play slower, and
+## is never saved: it is where a player learns a song the scored run would end.
+##
+## The session also turns the run into feel: each beat of the song flares the world
+## and the hit line, the combo heats the scenery up, a miss jolts the camera, and
+## combo milestones are called out. And it keeps what the results screen teaches
+## from: how early or late each hit was, and which keys were missed.
 
 signal finished(result: Dictionary)
 signal quit_to_menu
@@ -16,6 +24,9 @@ const END_TAIL := 1.6
 const COUNT_IN_BEATS := 3
 const FAIL_WAIT := 2.8
 const STEP := 1.0 / 240.0
+## A full-heat world at this combo; the same number the score multiplier tops out at.
+const HEAT_COMBO := 50.0
+const MILESTONES: Array[int] = [25, 50, 100, 200, 300, 400, 500]
 
 var chart: Chart
 var judge: Judge
@@ -29,6 +40,9 @@ var _lead: AudioStreamPlayer
 var _sfx: Dictionary = {}
 var _held_keys: Dictionary = {}
 var _lead_open_until: float = -INF
+## How much of the song (first note to last) the vocal was open for, for the bot checks.
+var _lead_time_total: float = 0.0
+var _lead_time_open: float = 0.0
 var _gate: float = 0.0
 var _paused: bool = false
 var _counting_in: bool = false
@@ -55,6 +69,17 @@ var _progress_bar: ColorRect
 var _center_label: Label
 var _pause_panel: Control
 var _hands_cue: Label
+var _milestone_label: Label
+var _stage: Stage
+var _practice: bool = false
+var _speed: float = 1.0
+var _last_beat: int = -1000000
+var _next_milestone: int = 0
+## Seconds early (negative) or late (positive) of every hit, for the results screen.
+var _offsets: Array[float] = []
+## Lane -> notes missed or holds dropped there.
+var _trouble: Dictionary = {}
+var _progress_at_end: float = 1.0
 
 const HANDS_TEXT := "Hands on the home row:  A S D F      J K L ;"
 
@@ -65,8 +90,12 @@ func begin(song: Chart, highway: Highway, world: ThemeWorld, sfx: Dictionary, op
 	_world = world
 	_sfx = sfx
 	_bot_name = options.get("bot", "")
+	_stage = options.get("stage")
+	_practice = options.get("practice", false)
+	_speed = float(options.get("speed", 1.0)) if _practice else 1.0
 	_first_note_time = chart.notes[0].t
 	judge = Judge.new(chart)
+	judge.no_fail = _practice
 	judge.note_hit.connect(_on_note_hit)
 	judge.note_missed.connect(_on_note_missed)
 	judge.wrong_key.connect(_on_wrong_key)
@@ -78,8 +107,12 @@ func begin(song: Chart, highway: Highway, world: ThemeWorld, sfx: Dictionary, op
 	else:
 		_backing = _make_player(chart.backing_path, 0.0)
 		_lead = _make_player(chart.lead_path, -80.0)
+		_backing.pitch_scale = _speed
+		_lead.pitch_scale = _speed
+		Settings.set_practice_speed(_speed)
 		clock = SongClock.new(_backing, _lead)
 		clock.offset = options.get("offset", 0.0)
+		clock.speed = _speed
 	_build_hud()
 	if not _bot_name.is_empty():
 		_build_bot(_bot_name)
@@ -98,6 +131,12 @@ func run_to_end_headless() -> Dictionary:
 		_step(STEP)
 		guard += 1
 	return result
+
+
+func _exit_tree() -> void:
+	# The pitch correction is on a shared bus; never leave it on for the next run.
+	if clock != null and not clock.manual:
+		Settings.set_practice_speed(1.0)
 
 
 func _process(delta: float) -> void:
@@ -183,18 +222,76 @@ func _step(delta: float) -> void:
 	_run_bot(now)
 	judge.advance(now)
 	_update_lead_gate(now, delta)
+	if now >= _first_note_time and now <= chart.last_note_end():
+		_lead_time_total += delta
+		if _lead_should_open(now):
+			_lead_time_open += delta
 	_highway.update_view(now, delta, judge.is_holding())
 	_world.set_target_speed(0.74 + 0.26 * clampf(judge.fuel / 0.5, 0.0, 1.0))
 	_world.set_headlight_level(judge.fuel / 0.4)
+	_world.set_heat(float(judge.combo) / HEAT_COMBO)
+	_tick_beat(now)
+	_tick_milestone()
 	_update_hud(now)
 	if not _ended and _failed_at_usec < 0 and now >= chart.last_note_end() + END_TAIL:
 		_finish(false)
 
 
+## Flares the world and the hit line on each beat of the song, harder on bar lines.
+func _tick_beat(now: float) -> void:
+	var index: int = int(floor((now - chart.beat_offset) / chart.beat_seconds()))
+	if index == _last_beat:
+		return
+	_last_beat = index
+	if index < 0 or now > chart.last_note_end() + 0.5:
+		return
+	var strength: float = 1.0 if index % chart.beats_per_bar == 0 else 0.5
+	_world.beat(strength)
+	if Settings.motion:
+		_highway.pulse(strength)
+
+
+## Calls out a combo milestone once, the first time the combo reaches it.
+func _tick_milestone() -> void:
+	if _next_milestone >= MILESTONES.size() or judge.combo < MILESTONES[_next_milestone]:
+		return
+	var reached: int = MILESTONES[_next_milestone]
+	_next_milestone += 1
+	_world.beat(1.6)
+	_play(_sfx, "milestone")
+	if clock.manual:
+		return
+	_milestone_label.text = "%d COMBO" % reached
+	_milestone_label.pivot_offset = _milestone_label.size * 0.5
+	_milestone_label.scale = Vector2.ONE * 1.5
+	var tween := create_tween()
+	tween.set_parallel(true)
+	_milestone_label.modulate.a = 1.0
+	tween.tween_property(_milestone_label, "scale", Vector2.ONE, 0.18)
+	tween.tween_property(_milestone_label, "modulate:a", 0.0, 0.5).set_delay(0.9)
+
+
+## The melody stem is the player's to keep alive. A hit opens it, and it stays open
+## through the gap until the next note is due, so a real vocal keeps singing between
+## the charted notes (breaths, short words, notes Easy leaves out). A miss cuts it
+## when that note's window closes; letting go of a hold cuts it at once.
+func _lead_should_open(now: float) -> bool:
+	return judge.is_holding() or now < _lead_open_until
+
+
+## How long a hit on note n keeps the melody playing: until the next note's hit
+## window closes, or a few seconds past the end of the last note.
+func _carry_until(n: Chart.Note) -> float:
+	var i: int = chart.notes.find(n)
+	if i >= 0 and i + 1 < chart.notes.size():
+		return chart.notes[i + 1].t + Judge.GOOD_WINDOW
+	return n.end_time() + 3.0
+
+
 func _update_lead_gate(now: float, delta: float) -> void:
 	if clock.manual:
 		return
-	var open: bool = judge.is_holding() or now < _lead_open_until
+	var open: bool = _lead_should_open(now)
 	# Opens almost instantly so a hit feels immediate; closes a touch slower so it cannot click.
 	_gate = move_toward(_gate, 1.0 if open else 0.0, delta / (0.012 if open else 0.06))
 	_lead.volume_db = linear_to_db(maxf(_gate, 0.0001)) + LEAD_BOOST_DB
@@ -239,14 +336,19 @@ func _show_count() -> void:
 	_play(_sfx, "click")
 
 
-func _on_note_hit(n: Chart.Note, verdict: String, _offset: float) -> void:
+func _on_note_hit(n: Chart.Note, verdict: String, offset: float) -> void:
+	_offsets.append(offset)
 	_highway.celebrate(n.lane, verdict == "perfect")
 	_flash_judgement(verdict.to_upper(), Color(1.0, 0.93, 0.7) if verdict == "perfect" else Color(0.55, 0.95, 0.65))
 	if not n.is_hold:
-		_lead_open_until = maxf(_lead_open_until, n.end_time() + 0.05)
+		_lead_open_until = maxf(_lead_open_until, _carry_until(n))
 
 
-func _on_note_missed(_n: Chart.Note) -> void:
+func _on_note_missed(n: Chart.Note) -> void:
+	_trouble[n.lane] = int(_trouble.get(n.lane, 0)) + 1
+	if _stage:
+		_stage.jolt(0.7)
+	_lead_open_until = minf(_lead_open_until, clock.now())
 	_flash_judgement("MISS", Color(1.0, 0.34, 0.46))
 
 
@@ -257,16 +359,20 @@ func _on_wrong_key(lane: int) -> void:
 
 func _on_hold_ended(n: Chart.Note, completed: bool) -> void:
 	if completed:
-		_lead_open_until = maxf(_lead_open_until, n.end_time() + 0.05)
+		_lead_open_until = maxf(_lead_open_until, _carry_until(n))
 		_highway.celebrate(n.lane, true)
 		_flash_judgement("HELD", Color(0.75, 0.97, 1.0))
 		_play(_sfx, "held")
 	else:
+		_trouble[n.lane] = int(_trouble.get(n.lane, 0)) + 1
+		_lead_open_until = minf(_lead_open_until, clock.now())
 		_flash_judgement("LET GO", Color(0.65, 0.68, 0.8))
 
 
 func _on_out_of_fuel() -> void:
 	_failed_at_usec = Time.get_ticks_usec()
+	_progress_at_end = clampf(clock.now() / maxf(chart.last_note_end(), 0.001), 0.0, 1.0)
+	_world.set_heat(0.0)
 	_world.set_target_speed(0.0)
 	_world.set_headlight_level(0.0)
 	if clock.manual:
@@ -292,7 +398,19 @@ func _finish(failed: bool) -> void:
 		_highway.set_key_pressed(int(_held_keys[source]), false)
 	_held_keys.clear()
 	_hud.visible = false
+	_world.set_heat(0.0)
+	var sorted_offsets: Array[float] = _offsets.duplicate()
+	sorted_offsets.sort()
+	var trouble: Array = []
+	for lane: int in _trouble:
+		trouble.append([lane, int(_trouble[lane])])
+	trouble.sort_custom(func(a: Array, b: Array) -> bool: return int(a[1]) > int(b[1]) or (int(a[1]) == int(b[1]) and int(a[0]) < int(b[0])))
 	finished.emit({
+		"practice": _practice, "speed": _speed, "progress": _progress_at_end if failed else 1.0,
+		# The median, so a few wild presses do not hide a steady habit of rushing or dragging.
+		"typical_offset": sorted_offsets[sorted_offsets.size() / 2] if sorted_offsets.size() >= 8 else 0.0,
+		"offsets_counted": sorted_offsets.size(), "trouble": trouble,
+		"lead_open_share": snappedf(_lead_time_open / maxf(_lead_time_total, 0.001), 0.001),
 		"song_id": chart.id, "title": chart.title, "failed": failed, "difficulty": chart.difficulty, "theme": chart.theme,
 		"score": judge.score(), "grade": "" if failed else judge.grade(), "accuracy": judge.accuracy(),
 		"hits": judge.hits, "total": chart.notes.size(), "perfects": judge.perfects, "goods": judge.goods,
@@ -332,6 +450,7 @@ func _make_player(path: String, volume_db: float) -> AudioStreamPlayer:
 	# Built-in songs are imported resources; imported songs are plain WAV files in user://.
 	player.stream = load(path) if path.begins_with("res://") else AudioStreamWAV.load_from_file(path)
 	player.volume_db = volume_db
+	player.bus = Settings.BUS_STEMS
 	add_child(player)
 	return player
 
@@ -440,6 +559,17 @@ func _build_hud() -> void:
 	Ui.anchor(_judgement, 0.5, 0.26, 0.5, 0.26, -300, -40, 300, 40, HORIZONTAL_ALIGNMENT_CENTER)
 	_judgement.modulate.a = 0.0
 	_hud.add_child(_judgement)
+	_milestone_label = Ui.label("", 44, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(_milestone_label, 0.5, 0.15, 0.5, 0.15, -300, -30, 300, 30, HORIZONTAL_ALIGNMENT_CENTER)
+	_milestone_label.modulate.a = 0.0
+	_hud.add_child(_milestone_label)
+	if _practice:
+		var tag_text: String = "PRACTICE   ·   no fail, not scored"
+		if _speed < 0.999:
+			tag_text = "PRACTICE   ·   %d%% speed   ·   no fail, not scored" % int(round(_speed * 100.0))
+		var tag := Ui.label(tag_text, 22, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+		Ui.anchor(tag, 0.0, 0.0, 1.0, 0.0, 0, 22, 0, 52, HORIZONTAL_ALIGNMENT_CENTER)
+		_hud.add_child(tag)
 
 	_center_label = Ui.label("", 120, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(_center_label, 0.5, 0.42, 0.5, 0.42, -500, -90, 500, 90, HORIZONTAL_ALIGNMENT_CENTER)

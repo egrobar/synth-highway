@@ -1,12 +1,14 @@
 class_name SaveData
 extends RefCounted
-## Everything that survives between sessions: timing calibration and best runs,
-## kept per song and difficulty ("county_line:normal").
+## Everything that survives between sessions: timing calibration, the player's
+## settings (see Settings) and best runs, kept per song and difficulty
+## ("county_line:normal"). Practice runs are never recorded.
 
 const PATH := "user://save.json"
 
 var calibration: float = 0.0
 var best: Dictionary = {}
+var settings: Dictionary = Settings.DEFAULTS.duplicate()
 
 
 static func load_or_new() -> SaveData:
@@ -16,6 +18,8 @@ static func load_or_new() -> SaveData:
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(PATH))
 	if parsed is Dictionary:
 		save.calibration = float(parsed.get("calibration", 0.0))
+		for key: String in Settings.DEFAULTS:
+			save.settings[key] = (parsed.get("settings", {}) as Dictionary).get(key, Settings.DEFAULTS[key])
 		var stored: Dictionary = parsed.get("best", {})
 		for key: String in stored:
 			# The first build kept one best per song; those were Normal runs.
@@ -25,7 +29,7 @@ static func load_or_new() -> SaveData:
 
 func write() -> void:
 	var file := FileAccess.open(PATH, FileAccess.WRITE)
-	file.store_string(JSON.stringify({"calibration": calibration, "best": best}, " "))
+	file.store_string(JSON.stringify({"calibration": calibration, "settings": settings, "best": best}, " "))
 
 
 func best_for(song_id: String, difficulty: String) -> Dictionary:

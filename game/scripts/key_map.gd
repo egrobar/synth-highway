@@ -20,6 +20,21 @@ const REACH: Array[int] = [4, 5]
 ## F and J: the keys with the homing bumps.
 const HOMING: Array[int] = [3, 6]
 
+## Which finger plays a lane, mirrored across the hands: 0 pinky, 1 ring, 2 middle, 3 index.
+## Notes, lanes and keys are coloured by finger, so the colour of an approaching note says
+## which finger moves before the eye has worked out which of ten lanes it is in.
+const HOME_FINGERS: Array[int] = [0, 1, 2, 3, 3, 3, 3, 2, 1, 0]
+## The top-row keys W E R T Y U I O P, by standard touch-typing fingering.
+const SHARP_FINGERS: Array[int] = [1, 2, 3, 3, 3, 3, 2, 1, 0]
+const FINGER_NAMES: Array[String] = ["pinky", "ring", "middle", "index"]
+## Chosen to stay apart from each other, from the orange of sharps and the red of a miss.
+const FINGER_COLORS: Array[Color] = [
+	Color(0.74, 0.52, 1.0),   # pinky: violet
+	Color(1.0, 0.88, 0.3),    # ring: yellow
+	Color(0.42, 1.0, 0.55),   # middle: green
+	Color(0.247, 0.847, 1.0), # index: cyan
+]
+
 
 ## The lane a physical key plays, or -1 if it is not one of the instrument's keys.
 static func lane_for(code: Key) -> int:
@@ -32,6 +47,16 @@ static func lane_for(code: Key) -> int:
 
 static func is_sharp(lane: int) -> bool:
 	return lane >= SHARP_BASE
+
+
+static func finger_for(lane: int) -> int:
+	if is_sharp(lane):
+		return SHARP_FINGERS[clampi(lane - SHARP_BASE, 0, SHARP_FINGERS.size() - 1)]
+	return HOME_FINGERS[clampi(lane, 0, COUNT - 1)]
+
+
+static func color_for(lane: int) -> Color:
+	return FINGER_COLORS[finger_for(lane)]
 
 
 static func key_for(lane: int) -> Key:

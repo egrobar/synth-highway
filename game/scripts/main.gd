@@ -1,7 +1,11 @@
 extends Node
 ## Game flow: title → the route (regions and their songs on one screen) → drive →
-## results; plus the timing check and loading your own song. The selected region's
-## world keeps rolling behind every screen.
+## results; plus settings (which holds the timing check) and loading your own song.
+## The selected region's world keeps rolling behind every screen.
+##
+## A song can be driven for a score or as a practice run (P on the route, or on
+## the results screen after running out of gas): no fail, optionally slower, never
+## saved. A player with no saved runs starts on Easy.
 ##
 ## The route screen shows everything at once: a strip of regions along the top,
 ## the selected region's songs in the middle, and the selected song's details on
@@ -16,13 +20,20 @@ extends Node
 ##   --import-file=PATH [--import-title=...] [--region=<id>]   run an import without the file picker
 ##   --unlock-all           open every region
 
-enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS }
+enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS, SETTINGS }
+
+## P on the route steps through these: off, then practice at each speed.
+const PRACTICE_SPEEDS: Array[float] = [0.0, 1.0, 0.85, 0.7]
+const SETTING_ROWS: Array[String] = ["music", "effects", "note_speed", "letters", "motion", "fullscreen", "timing"]
+const SETTING_NAMES := {"music": "Music volume", "effects": "Sound effects volume", "note_speed": "Note speed",
+	"letters": "Letters on notes", "motion": "Beat flashes and camera movement", "fullscreen": "Fullscreen",
+	"timing": "Timing check"}
 
 const CALIBRATE_CLICKS := 12
 const CALIBRATE_INTERVAL := 0.6
 const CALIBRATE_SKIP := 2
 const SHOT_TIMES: Array[float] = [-1.0, 9.0, 12.2, 33.0, 60.0]
-const SFX_NAMES: Array[String] = ["click", "wrong", "ui", "held", "out_of_gas"]
+const SFX_NAMES: Array[String] = ["click", "wrong", "ui", "held", "out_of_gas", "milestone", "clear"]
 const SONG_ROWS := 7
 const ROW_HEIGHT := 62.0
 const LIST_TOP := 196.0
@@ -46,6 +57,11 @@ var _songs: Array[Dictionary] = []
 var _difficulty: String = "normal"
 var _current_song: Dictionary = {}
 var _remove_armed_until: int = 0
+var _practice_step: int = 0
+var _last_result: Dictionary = {}
+var _settings_row: int = 0
+## Where Escape leads from settings and from the timing check: the screen they were opened from.
+var _settings_return: Callable
 
 var _importer: SongImporter
 var _import_title: LineEdit
@@ -67,6 +83,11 @@ var _toast: Label
 func _ready() -> void:
 	_parse_args()
 	_save = SaveData.load_or_new()
+	Settings.apply(_save.settings)
+	# Someone who has never finished a song starts on Easy; Normal ended a first run in seconds.
+	if _save.best.is_empty():
+		_difficulty = "easy"
+	_settings_return = _show_title
 	_load_regions()
 	_stage = Stage.new()
 	add_child(_stage)
@@ -123,10 +144,14 @@ func _region_ids() -> Array:
 func _build_audio() -> void:
 	_ambient = AudioStreamPlayer.new()
 	_ambient.volume_db = -9.0
+	_ambient.bus = Settings.BUS_MUSIC
 	add_child(_ambient)
 	for sfx_name: String in SFX_NAMES:
 		var player := AudioStreamPlayer.new()
-		player.stream = load("res://assets/audio/sfx_%s.wav" % sfx_name)
+		player.bus = Settings.BUS_EFFECTS
+		# A checkout whose effects have not been rebuilt still runs; that effect is just silent.
+		if ResourceLoader.exists("res://assets/audio/sfx_%s.wav" % sfx_name):
+			player.stream = load("res://assets/audio/sfx_%s.wav" % sfx_name)
 		add_child(player)
 		_sfx[sfx_name] = player
 
@@ -180,22 +205,30 @@ func _unhandled_input(event: InputEvent) -> void:
 			if code == KEY_SPACE or code == KEY_ENTER:
 				_click()
 				_show_route()
-			elif code == KEY_C:
+			elif code == KEY_S:
 				_click()
-				_show_calibration()
+				_open_settings(_show_title)
 		Screen.ROUTE:
 			_route_key(code)
+		Screen.SETTINGS:
+			_settings_key(code)
 		Screen.CALIBRATE:
 			if code == KEY_ESCAPE:
-				_show_title()
+				_show_settings()
 			elif code == KEY_SPACE and not _calib_done:
 				_calib_taps.append(Time.get_ticks_usec())
 		Screen.RESULTS:
-			if code == KEY_ENTER:
+			# Out of gas, there is no "next song": the offers are to try again or to practise this one.
+			if code == KEY_ENTER and not _last_result.get("failed", false):
 				_click()
 				_drive_next()
 			elif code == KEY_SPACE:
 				_click()
+				_start_run(_current_song)
+			elif code == KEY_P:
+				_click()
+				if _practice_step == 0:
+					_practice_step = 2
 				_start_run(_current_song)
 			elif code == KEY_ESCAPE:
 				_click()
@@ -270,7 +303,7 @@ func _show_title() -> void:
 	Ui.anchor(line, 0.0, 0.0, 1.0, 0.0, 0, 300, 0, 348, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(line)
 	_ui.add_child(_home_row_guide(400.0))
-	_hint("SPACE  start        C  timing check")
+	_hint("SPACE  start        S  settings")
 
 
 ## The ten keys, as they sit under your hands: fingers rest on A S D F and J K L ;,
@@ -284,7 +317,8 @@ func _home_row_guide(top: float) -> Control:
 	var start: float = 460.0 - (cap * 10.0 + gap * 9.0) * 0.5
 	for lane: int in KeyMap.COUNT:
 		var reach: bool = KeyMap.REACH.has(lane)
-		var key := Ui.card(not reach, Ui.ACCENT if not reach else Color(1, 1, 1, 0.2))
+		# Each key wears its finger's colour, the same one its notes arrive in.
+		var key := Ui.card(true, KeyMap.color_for(lane) if not reach else Color(KeyMap.color_for(lane), 0.45))
 		var x: float = start + lane * (cap + gap)
 		Ui.anchor(key, 0.0, 0.0, 0.0, 0.0, x, 40, x + cap, 40 + cap)
 		var letter := Ui.label(KeyMap.label_for(lane), 40, Ui.TEXT if not reach else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
@@ -292,7 +326,7 @@ func _home_row_guide(top: float) -> Control:
 		key.add_child(letter)
 		if KeyMap.HOMING.has(lane):
 			var bump := ColorRect.new()
-			bump.color = Ui.ACCENT
+			bump.color = KeyMap.color_for(lane)
 			Ui.anchor(bump, 0.5, 1.0, 0.5, 1.0, -14, -14, 14, -10)
 			key.add_child(bump)
 		box.add_child(key)
@@ -303,7 +337,7 @@ func _home_row_guide(top: float) -> Control:
 	var right := Ui.label("RIGHT HAND RESTS HERE", 20, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(right, 0.0, 0.0, 0.0, 0.0, right_x, 4, right_x + cap * 4 + gap * 3, 34, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(right)
-	var note := Ui.label("Index fingers reach for G and H. Easy never uses them. Your hands stay put for every song.", 24, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	var note := Ui.label("Notes arrive in the colour of the finger that plays them. Index fingers reach for G and H; Easy never uses them.", 24, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(note, 0.0, 0.0, 1.0, 0.0, -100, 140, 100, 176, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(note)
 	var sharps := Ui.label("On Normal, sharps arrive in orange: play them on the row above, W E R T Y U I O P, between the home keys.", 24, Color(1.0, 0.62, 0.25), HORIZONTAL_ALIGNMENT_CENTER)
@@ -383,7 +417,7 @@ func _show_route(message: String = "") -> void:
 	_ui.add_child(load_row)
 	if not _songs.is_empty():
 		_ui.add_child(_song_detail(_songs[selected], accent, unlocked))
-	_hint("← →  region      ↑ ↓  song      TAB  easy / normal      ENTER  drive      L  load your song      ESC  title")
+	_hint("← →  region     ↑ ↓  song     TAB  easy / normal     P  practice     ENTER  drive     L  load your song     S  settings     ESC  title")
 	if not message.is_empty():
 		_show_toast(message)
 
@@ -510,9 +544,18 @@ func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 				_show_route())
 		card.add_child(chip)
 
+	# Practice, stepped through with P: off, then no-fail runs at full, 85% and 70% speed.
+	var practising: bool = _practice_step > 0
+	var practice_text: String = "P   Practice run: off"
+	if practising:
+		practice_text = "P   Practice run: %d%% speed, no fail, not scored" % int(round(PRACTICE_SPEEDS[_practice_step] * 100.0))
+	var practice := Ui.label(practice_text, 22, Ui.WARM if practising else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(practice, 0.0, 0.0, 1.0, 0.0, 28, 308, -28, 340, HORIZONTAL_ALIGNMENT_CENTER)
+	_on_click(practice, _step_practice)
+	card.add_child(practice)
 	var drive := Ui.card(unlocked, accent)
-	Ui.anchor(drive, 0.0, 0.0, 1.0, 0.0, 28, 330, -28, 410)
-	var drive_text: String = "ENTER   DRIVE" if unlocked else "LOCKED"
+	Ui.anchor(drive, 0.0, 0.0, 1.0, 0.0, 28, 346, -28, 424)
+	var drive_text: String = ("ENTER   PRACTISE" if practising else "ENTER   DRIVE") if unlocked else "LOCKED"
 	var drive_label := Ui.label(drive_text, 38, accent if unlocked else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(drive_label, 0.0, 0.0, 1.0, 1.0, 0, 14, 0, -12, HORIZONTAL_ALIGNMENT_CENTER)
 	drive.add_child(drive_label)
@@ -520,7 +563,7 @@ func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 	card.add_child(drive)
 	if song["source"] == "imported":
 		var remove := Ui.label("X  remove this song", 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-		Ui.anchor(remove, 0.0, 0.0, 1.0, 0.0, 0, 420, 0, 450, HORIZONTAL_ALIGNMENT_CENTER)
+		Ui.anchor(remove, 0.0, 0.0, 1.0, 0.0, 0, 432, 0, 460, HORIZONTAL_ALIGNMENT_CENTER)
 		card.add_child(remove)
 	return card
 
@@ -556,11 +599,22 @@ func _route_key(code: Key) -> void:
 		KEY_L:
 			_click()
 			_open_file_picker()
+		KEY_P:
+			_click()
+			_step_practice()
+		KEY_S:
+			_click()
+			_open_settings(_show_route)
 		KEY_X:
 			_try_remove()
 		KEY_ESCAPE:
 			_click()
 			_show_title()
+
+
+func _step_practice() -> void:
+	_practice_step = (_practice_step + 1) % PRACTICE_SPEEDS.size()
+	_show_route()
 
 
 func _drive_selected() -> void:
@@ -749,7 +803,10 @@ func _start_run(song: Dictionary) -> void:
 	_session.finished.connect(_on_run_finished)
 	_session.quit_to_menu.connect(_show_route)
 	_session.restart_requested.connect(func() -> void: _start_run(_current_song))
-	var options := {"offset": _save.calibration}
+	var options := {"offset": _save.calibration, "stage": _stage}
+	if _practice_step > 0 and not _options.has("bot"):
+		options["practice"] = true
+		options["speed"] = PRACTICE_SPEEDS[_practice_step]
 	if _options.has("bot"):
 		options["bot"] = str(_options["bot"])
 	if _options.has("fast"):
@@ -779,11 +836,16 @@ func _on_run_finished(result: Dictionary) -> void:
 		return
 	var regions_open_before: int = _open_region_count()
 	var new_best: bool = false
-	if not _options.has("bot"):
+	_last_result = result
+	if not _options.has("bot") and not result.get("practice", false):
 		new_best = _save.record(result)
 	_stage.world.set_target_speed(0.0 if result["failed"] else 0.6)
 	_ambient.volume_db = -9.0
-	_show_results(result, new_best, _open_region_count() > regions_open_before)
+	var opened_region: bool = _open_region_count() > regions_open_before
+	# One fanfare, kept for the runs that changed something: a new best or a new road.
+	if new_best or opened_region:
+		(_sfx["clear"] as AudioStreamPlayer).play()
+	_show_results(result, new_best, opened_region)
 	if _options.has("bot"):
 		print("RESULT ", JSON.stringify(result))
 		print("TIMING ", JSON.stringify(_session.timing))
@@ -826,10 +888,17 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> v
 	var heading := Ui.label("OUT OF GAS" if failed else str(result["title"]), 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 96, 0, 176, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(heading)
-	var level := Ui.label(str(result.get("difficulty", "normal")).to_upper(), 26, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	var practice: bool = result.get("practice", false)
+	var level_text: String = str(result.get("difficulty", "normal")).to_upper()
+	if practice:
+		level_text += "   ·   PRACTICE AT %d%% SPEED, NOT SAVED" % int(round(float(result.get("speed", 1.0)) * 100.0))
+	elif failed:
+		level_text += "   ·   HOW FAR YOU GOT"
+	var level := Ui.label(level_text, 26, Ui.WARM if practice else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(level, 0.0, 0.0, 1.0, 0.0, 0, 176, 0, 208, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(level)
-	var grade := Ui.label("—" if failed else str(result["grade"]), 190, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	var grade_text: String = "%d%%" % int(round(float(result.get("progress", 0.0)) * 100.0)) if failed else str(result["grade"])
+	var grade := Ui.label(grade_text, 190, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(grade, 0.0, 0.0, 1.0, 0.0, 0, 200, 0, 440, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(grade)
 	var summary: String = "Score %d     Accuracy %d%%     Max combo %d" % [
@@ -843,6 +912,27 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> v
 	var line_two := Ui.label(detail, 28, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(line_two, 0.0, 0.0, 1.0, 0.0, 0, 510, 0, 552, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(line_two)
+	# What to work on: a steady habit of rushing or dragging, and the keys that slipped most.
+	var insights: Array[String] = []
+	if int(result.get("offsets_counted", 0)) >= 8:
+		var ms: int = int(round(float(result["typical_offset"]) * 1000.0))
+		if absi(ms) < 20:
+			insights.append("Timing: right on the beat")
+		else:
+			var habit: String = "Timing: you tend to press %d ms %s" % [absi(ms), "late" if ms > 0 else "early"]
+			if absi(ms) >= 45:
+				habit += "  (the timing check in Settings can correct for your speakers)"
+			insights.append(habit)
+	var trouble: Array = result.get("trouble", [])
+	if not trouble.is_empty():
+		var keys: Array[String] = []
+		for entry: Array in trouble.slice(0, 3):
+			keys.append("%s ×%d" % [KeyMap.label_for(int(entry[0])), int(entry[1])])
+		insights.append("Slipped most on:   " + "     ".join(keys))
+	for i: int in insights.size():
+		var insight := Ui.label(insights[i], 26, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+		Ui.anchor(insight, 0.0, 0.0, 1.0, 0.0, 0, 566 + i * 38, 0, 602 + i * 38, HORIZONTAL_ALIGNMENT_CENTER)
+		_ui.add_child(insight)
 	var news: Array[String] = []
 	if new_best:
 		news.append("NEW BEST")
@@ -850,9 +940,104 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> v
 		news.append("NEW ROAD OPEN ON THE ROUTE")
 	if not news.is_empty():
 		var banner := Ui.label("     ".join(news), 34, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
-		Ui.anchor(banner, 0.0, 0.0, 1.0, 0.0, 0, 566, 0, 614, HORIZONTAL_ALIGNMENT_CENTER)
+		Ui.anchor(banner, 0.0, 0.0, 1.0, 0.0, 0, 656, 0, 704, HORIZONTAL_ALIGNMENT_CENTER)
 		_ui.add_child(banner)
-	_hint("ENTER  next song        SPACE  drive again        ESC  route")
+	if failed:
+		_hint("SPACE  try again        P  practise it (no fail, slower)        ESC  route")
+	else:
+		_hint("ENTER  next song        SPACE  drive again        ESC  route")
+
+
+# ---------------------------------------------------------------- settings
+
+func _open_settings(back: Callable) -> void:
+	_settings_return = back
+	_show_settings()
+
+
+func _show_settings() -> void:
+	_clear_ui()
+	_screen = Screen.SETTINGS
+	_ui.add_child(Ui.dim_panel(0.72))
+	var heading := Ui.label("SETTINGS", 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 70, 0, 150, HORIZONTAL_ALIGNMENT_CENTER)
+	_ui.add_child(heading)
+	for i: int in SETTING_ROWS.size():
+		var key: String = SETTING_ROWS[i]
+		var selected: bool = i == _settings_row
+		var row := Ui.card(selected)
+		var y: float = 190.0 + i * 74.0
+		Ui.anchor(row, 0.5, 0.0, 0.5, 0.0, -520, y, 520, y + 64)
+		var name := Ui.label(str(SETTING_NAMES[key]), 28, Ui.TEXT if selected else Ui.MUTED)
+		Ui.anchor(name, 0.0, 0.0, 0.6, 1.0, 26, 12, 0, -10)
+		row.add_child(name)
+		var shown: String = _setting_text(key)
+		if selected:
+			shown = "ENTER  " + shown if key == "timing" else "‹   %s   ›" % shown
+		var current := Ui.label(shown, 28, Ui.ACCENT if selected else Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
+		Ui.anchor(current, 0.45, 0.0, 1.0, 1.0, 0, 12, -26, -10, HORIZONTAL_ALIGNMENT_RIGHT)
+		row.add_child(current)
+		_on_click(row, func() -> void:
+			if _settings_row == i:
+				_change_setting(1)
+			else:
+				_settings_row = i
+				_click()
+				_show_settings())
+		_ui.add_child(row)
+	_hint("↑ ↓  choose        ← →  change        ESC  back")
+
+
+func _setting_text(key: String) -> String:
+	var current: Variant = Settings.value(_save.settings, key) if key != "timing" else null
+	match key:
+		"music", "effects":
+			return "%d%%" % int(round(float(current) * 100.0))
+		"note_speed":
+			return str(Settings.NOTE_SPEEDS[int(current)][0])
+		"timing":
+			return "run it   (offset now %+d ms)" % int(round(_save.calibration * 1000.0))
+	return "On" if bool(current) else "Off"
+
+
+func _settings_key(code: Key) -> void:
+	match code:
+		KEY_UP:
+			_settings_row = wrapi(_settings_row - 1, 0, SETTING_ROWS.size())
+			_click()
+			_show_settings()
+		KEY_DOWN:
+			_settings_row = wrapi(_settings_row + 1, 0, SETTING_ROWS.size())
+			_click()
+			_show_settings()
+		KEY_LEFT:
+			_change_setting(-1)
+		KEY_RIGHT, KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
+			_change_setting(1)
+		KEY_ESCAPE:
+			_click()
+			_settings_return.call()
+
+
+func _change_setting(step: int) -> void:
+	var key: String = SETTING_ROWS[_settings_row]
+	var current: Variant = Settings.value(_save.settings, key) if key != "timing" else null
+	match key:
+		"music", "effects":
+			_save.settings[key] = clampf(snappedf(float(current) + 0.1 * step, 0.1), 0.0, 1.0)
+		"note_speed":
+			_save.settings[key] = clampi(int(current) + step, 0, Settings.NOTE_SPEEDS.size() - 1)
+		"timing":
+			_click()
+			_show_calibration()
+			return
+		_:
+			_save.settings[key] = not bool(current)
+	Settings.apply(_save.settings)
+	_save.write()
+	# After applying, so the click is heard at the new effects volume.
+	_click()
+	_show_settings()
 
 
 # ---------------------------------------------------------------- timing check
@@ -913,4 +1098,4 @@ func _finish_calibration() -> void:
 		_calib_status.text = "Timing offset set to %+d ms" % int(round(_save.calibration * 1000.0))
 	await get_tree().create_timer(1.8).timeout
 	if _screen == Screen.CALIBRATE:
-		_show_title()
+		_show_settings()

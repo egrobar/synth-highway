@@ -4,11 +4,15 @@ extends Node3D
 ## overrides build() and assembles its world with the helpers below.
 ##
 ## Scenery is driven by one number, distance travelled, and never touches timing
-## or scoring. Repeating things are grouped and wrapped by their tile length, so
+## or scoring. It also answers the music and the player: beat() makes the glow, the
+## road's edge lines and the headlights flare on each beat, and set_heat() (the
+## combo, 0 to 1) speeds the road up and brightens the whole scene. A region gets
+## both for free; override on_beat() to add its own. Repeating things are grouped and wrapped by their tile length, so
 ## the road scrolls forever at a fixed, small cost. A region's assets live in
 ## res://assets/themes/<id>/ (models/, textures/, audio/ambience.wav).
 
-const WORLD_SPEED := 15.33  # matches the note speed: Highway.LENGTH / Highway.LOOKAHEAD
+## How much faster the scenery runs at full heat. Scenery only: the notes never speed up.
+const HEAT_SPEED := 0.3
 const ROAD_TILE := 10.0
 
 var id: String = ""
@@ -24,6 +28,13 @@ var _wrapped: Array[Dictionary] = []
 var _looped: Array[Dictionary] = []
 var _scrolling_materials: Array[StandardMaterial3D] = []
 var _flicker := RandomNumberGenerator.new()
+var _world_env: Environment
+var _glow_base: float = 0.85
+var _edge_paint: StandardMaterial3D
+var _edge_base: float = 0.0
+var _beat: float = 0.0
+var _heat: float = 0.0
+var _target_heat: float = 0.0
 
 
 func setup(theme_id: String, half_width: float) -> void:
@@ -41,7 +52,15 @@ func build() -> void:
 ## Override for per-frame effects of your own; call super first.
 func _process(delta: float) -> void:
 	_speed = move_toward(_speed, _target_speed, delta * 0.9)
-	_distance += delta * WORLD_SPEED * _speed
+	# Heat builds over a few seconds and falls away faster, so a broken combo is felt at once.
+	_heat = move_toward(_heat, _target_heat, delta * (0.35 if _target_heat > _heat else 1.6))
+	_beat = maxf(_beat - delta * 3.6, 0.0)
+	# The scenery keeps pace with the notes at whatever note speed the player chose.
+	_distance += delta * (Highway.LENGTH / Highway.lookahead) * _speed * (1.0 + HEAT_SPEED * _heat)
+	if _world_env:
+		_world_env.glow_intensity = _glow_base * (1.0 + 0.2 * _beat + 0.3 * _heat)
+	if _edge_paint:
+		_edge_paint.emission_energy_multiplier = _edge_base * (1.0 + 0.9 * _beat) + (0.5 * _beat + 0.5 * _heat)
 	for mat: StandardMaterial3D in _scrolling_materials:
 		mat.uv1_offset.y = -_distance / ROAD_TILE
 	for entry: Dictionary in _wrapped:
@@ -52,7 +71,7 @@ func _process(delta: float) -> void:
 	if _headlight_level < 0.3:
 		flicker = 0.55 + 0.45 * _flicker.randf()
 	for i: int in _headlights.size():
-		_headlights[i].light_energy = _headlight_energy[i] * (0.3 + 0.7 * _headlight_level) * flicker
+		_headlights[i].light_energy = _headlight_energy[i] * (0.3 + 0.7 * _headlight_level) * flicker * (1.0 + 0.1 * _beat)
 
 
 ## 1.0 is cruising speed. Scenery only: the song never changes tempo.
@@ -63,6 +82,28 @@ func set_target_speed(value: float) -> void:
 ## Low fuel dims the lights and makes them stutter, a warning you read without looking away.
 func set_headlight_level(level: float) -> void:
 	_headlight_level = clampf(level, 0.0, 1.0)
+
+
+## A beat of the song landed (1.0 for a bar line, less for the beats between).
+func beat(strength: float) -> void:
+	if not Settings.motion:
+		return
+	_beat = maxf(_beat, strength)
+	on_beat(strength)
+
+
+## Override for a region's own answer to the beat.
+func on_beat(_strength: float) -> void:
+	pass
+
+
+## How well the drive is going, 0 to 1, from the player's combo.
+func set_heat(level: float) -> void:
+	_target_heat = clampf(level, 0.0, 1.0) if Settings.motion else 0.0
+
+
+func heat() -> float:
+	return _heat
 
 
 func distance() -> float:
@@ -102,6 +143,8 @@ func make_environment(p: Dictionary) -> WorldEnvironment:
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.glow_enabled = true
 	env.glow_intensity = p.get("glow", 0.85)
+	_world_env = env
+	_glow_base = env.glow_intensity
 	env.glow_bloom = 0.04
 	env.glow_hdr_threshold = p.get("glow_threshold", 1.0)
 	env.fog_enabled = true
@@ -158,10 +201,12 @@ func make_road(texture_path: String, tint: Color = Color(0.9, 0.9, 0.95), edge: 
 	var paint := StandardMaterial3D.new()
 	paint.albedo_color = edge
 	paint.roughness = 0.6
-	if edge_glow > 0.0:
-		paint.emission_enabled = true
-		paint.emission = edge
-		paint.emission_energy_multiplier = edge_glow
+	# Always emissive, even at zero, so every region's edge lines can flare with the beat.
+	paint.emission_enabled = true
+	paint.emission = edge
+	paint.emission_energy_multiplier = edge_glow
+	_edge_paint = paint
+	_edge_base = edge_glow
 	for side: float in [-1.0, 1.0]:
 		var stripe := MeshInstance3D.new()
 		var stripe_mesh := BoxMesh.new()

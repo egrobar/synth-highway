@@ -13,6 +13,9 @@ var mode: Mode = Mode.STOPPED
 var manual: bool = false
 ## Player-calibrated seconds, added on top of the driver's reported latency.
 var offset: float = 0.0
+## Practice runs play slower: the stems' pitch scale. Song time then passes at this
+## fraction of real time, so everything measured in real seconds is scaled by it.
+var speed: float = 1.0
 
 var _manual_now: float = 0.0
 var _backing: AudioStreamPlayer
@@ -59,9 +62,9 @@ func now() -> float:
 	match mode:
 		Mode.LEAD_IN:
 			# Ends on exactly the value playback starts from, so nothing jumps at the handover.
-			t = -float(_lead_in_end_usec - Time.get_ticks_usec()) / 1000000.0 - _total_latency()
+			t = -float(_lead_in_end_usec - Time.get_ticks_usec()) / 1000000.0 * speed - _total_latency()
 		Mode.PLAYING:
-			t = _backing.get_playback_position() + AudioServer.get_time_since_last_mix() - _total_latency()
+			t = _backing.get_playback_position() + AudioServer.get_time_since_last_mix() * speed - _total_latency()
 		Mode.PAUSED:
 			return _frozen
 	# Position updates arrive in mix-sized chunks. Time must never run backwards.
@@ -110,7 +113,7 @@ func stem_gap() -> float:
 
 
 func _total_latency() -> float:
-	return AudioServer.get_output_latency() + offset
+	return (AudioServer.get_output_latency() + offset) * speed
 
 
 func _start_audio() -> void:

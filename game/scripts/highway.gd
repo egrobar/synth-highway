@@ -9,13 +9,19 @@ extends Node3D
 ## reaches, are tinted; a brighter line down the middle splits the two hands.
 ## Sharps (Normal only) are orange notes riding between two lanes, played on the
 ## dark top-row keys set between the home keys like a piano's black keys.
+##
+## Home-row notes, their lanes and their keys are coloured by the finger that plays
+## them (KeyMap.FINGER_COLORS), mirrored across the hands.
 
-const LOOKAHEAD := 3.0
+## Seconds a note is visible before it reaches the hit line. A setting: see Settings.NOTE_SPEEDS.
+static var lookahead: float = 3.0
+## Whether notes carry their key's letter. A setting.
+static var show_letters: bool = true
+
 const LENGTH := 46.0
 const KEY_WIDTH := 1.6
 const HEAD_LENGTH := 1.0
 const NOTE_HEIGHT := 0.3
-const COLOR_YOU := Color(0.247, 0.847, 1.0)
 const COLOR_SHARP := Color(1.0, 0.58, 0.18)
 const COLOR_MISS := Color(1.0, 0.247, 0.4)
 const COLOR_HOT := Color(0.85, 0.98, 1.0)
@@ -45,11 +51,13 @@ var _next_spark: int = 0
 var _hold_light: OmniLight3D
 
 var _box := BoxMesh.new()
-var _mat_you: StandardMaterial3D
+var _mat_heads: Array[StandardMaterial3D] = []
+var _mat_bodies: Array[StandardMaterial3D] = []
+var _line_mat: StandardMaterial3D
+var _pulse: float = 0.0
 var _mat_sharp: StandardMaterial3D
 var _mat_body_sharp: StandardMaterial3D
 var _mat_miss: StandardMaterial3D
-var _mat_body: StandardMaterial3D
 var _mat_hot: StandardMaterial3D
 var _mat_dead: StandardMaterial3D
 var _mat_beat: StandardMaterial3D
@@ -83,7 +91,12 @@ static func lane_x(lane: int) -> float:
 
 
 func units_per_second() -> float:
-	return LENGTH / LOOKAHEAD
+	return LENGTH / lookahead
+
+
+## A beat landed: the hit line flares and settles. Display only.
+func pulse(strength: float) -> void:
+	_pulse = maxf(_pulse, strength)
 
 
 func reset_run() -> void:
@@ -108,7 +121,7 @@ func flash_wrong(lane: int) -> void:
 
 
 func celebrate(lane: int, perfect: bool) -> void:
-	var color: Color = Color(1.0, 0.95, 0.75) if perfect else COLOR_YOU
+	var color: Color = Color(1.0, 0.95, 0.75) if perfect else _lane_color(lane)
 	var x: float = lane_x(lane)
 	for burst: Dictionary in _bursts:
 		if float(burst["t"]) >= 1.0:
@@ -131,7 +144,7 @@ func celebrate(lane: int, perfect: bool) -> void:
 func update_view(now: float, delta: float, holding: bool) -> void:
 	var speed: float = units_per_second()
 	var notes: Array[Chart.Note] = _chart.notes
-	while _spawn_index < notes.size() and notes[_spawn_index].t < now + LOOKAHEAD + 0.4:
+	while _spawn_index < notes.size() and notes[_spawn_index].t < now + lookahead + 0.4:
 		_acquire(notes[_spawn_index])
 		_spawn_index += 1
 	var hold_x: float = 0.0
@@ -155,6 +168,9 @@ func update_view(now: float, delta: float, holding: bool) -> void:
 	if _hold_light:
 		_hold_light.visible = holding and any_hold
 		_hold_light.position.x = hold_x
+	_pulse = maxf(_pulse - delta * 4.0, 0.0)
+	if _line_mat:
+		_line_mat.emission_energy_multiplier = 2.6 + 4.0 * _pulse
 	_update_beat_lines(now, speed)
 	_update_keys(now, delta)
 	_update_bursts(delta)
@@ -168,10 +184,10 @@ func _place(view: NoteView, now: float, speed: float) -> void:
 	var missed: bool = n.state == Chart.NoteState.MISSED
 	view.root.position = Vector3(lane_x(n.lane), 0.0, 0.0)
 	view.head.visible = not hit
-	view.label.visible = not hit and not missed
+	view.label.visible = show_letters and not hit and not missed
 	if not hit:
 		view.head.position.z = z_head - HEAD_LENGTH * 0.5
-		view.head.material_override = _mat_miss if missed else (_mat_sharp if KeyMap.is_sharp(n.lane) else _mat_you)
+		view.head.material_override = _mat_miss if missed else (_mat_sharp if KeyMap.is_sharp(n.lane) else _mat_heads[KeyMap.finger_for(n.lane)])
 		view.label.position.z = z_head - HEAD_LENGTH * 0.5
 	if not n.is_hold:
 		view.body.visible = false
@@ -188,7 +204,7 @@ func _place(view: NoteView, now: float, speed: float) -> void:
 		elif missed or n.hold_state == Chart.HoldState.DROPPED:
 			view.body.material_override = _mat_dead
 		else:
-			view.body.material_override = _mat_body_sharp if KeyMap.is_sharp(n.lane) else _mat_body
+			view.body.material_override = _mat_body_sharp if KeyMap.is_sharp(n.lane) else _mat_bodies[KeyMap.finger_for(n.lane)]
 
 
 func _acquire(n: Chart.Note) -> void:
@@ -241,7 +257,7 @@ func _update_beat_lines(now: float, speed: float) -> void:
 	var used: int = 0
 	while used < _beat_pool.size():
 		var t: float = offset + float(index) * beat
-		if t > now + LOOKAHEAD + 0.3:
+		if t > now + lookahead + 0.3:
 			break
 		var line: MeshInstance3D = _beat_pool[used]
 		if index >= 0:
@@ -266,7 +282,7 @@ func _update_keys(now: float, delta: float) -> void:
 			hint[n.lane] = maxf(float(hint.get(n.lane, 0.0)), 1.0 - maxf(until, 0.0) / 0.7)
 	for lane: int in _keys:
 		var key: Dictionary = _keys[lane]
-		var glow: Color = COLOR_SHARP if KeyMap.is_sharp(lane) else COLOR_YOU
+		var glow: Color = _lane_color(lane)
 		var mat: StandardMaterial3D = key["material"]
 		key["wrong"] = maxf(float(key["wrong"]) - delta, 0.0)
 		var down: bool = int(key["pressed"]) > 0
@@ -314,12 +330,18 @@ func _emissive(color: Color, energy: float, alpha: float = 1.0) -> StandardMater
 	return mat
 
 
+## Sharps keep their orange, the cue for "top row"; home lanes take their finger's colour.
+func _lane_color(lane: int) -> Color:
+	return COLOR_SHARP if KeyMap.is_sharp(lane) else KeyMap.color_for(lane)
+
+
 func _build_materials() -> void:
-	_mat_you = _emissive(COLOR_YOU, 1.5)
+	for color: Color in KeyMap.FINGER_COLORS:
+		_mat_heads.append(_emissive(color, 1.5))
+		_mat_bodies.append(_emissive(color, 0.55, 0.72))
 	_mat_sharp = _emissive(COLOR_SHARP, 1.6)
 	_mat_body_sharp = _emissive(COLOR_SHARP, 0.55, 0.72)
 	_mat_miss = _emissive(COLOR_MISS, 0.7, 0.75)
-	_mat_body = _emissive(COLOR_YOU, 0.55, 0.72)
 	_mat_hot = _emissive(COLOR_HOT, 3.4)
 	_mat_dead = _emissive(COLOR_DEAD, 0.08, 0.6)
 	_mat_beat = _emissive(Color(0.9, 0.82, 0.62), 0.12, 0.2)
@@ -363,12 +385,16 @@ func _build_keyboard() -> void:
 		label.set_meta("rest_y", 0.512)
 		add_child(label)
 		parts.append(label)
+		# A strip in the finger's colour along the key's far edge, where the notes land.
+		parts.append(_part(_box, Vector3(KEY_WIDTH * 0.92, 0.04, 0.34), Vector3(x, 0.515, 0.2),
+			_emissive(KeyMap.color_for(lane), 1.1)))
 		_keys[lane] = {"material": mat, "pressed": 0, "wrong": 0.0, "parts": parts}
 	if _chart.has_sharps():
 		_build_sharp_keys()
 	var line := MeshInstance3D.new()
 	line.mesh = _box
-	line.material_override = _emissive(COLOR_YOU, 3.2)
+	_line_mat = _emissive(Color(0.9, 0.97, 1.0), 2.6)
+	line.material_override = _line_mat
 	line.scale = Vector3(half_width() * 2.0 + 1.2, 0.05, 0.1)
 	line.position = Vector3(0.0, 0.05, 0.0)
 	add_child(line)
@@ -404,7 +430,15 @@ func _build_sharp_keys() -> void:
 ## and a brighter one between G and H where the left hand ends and the right begins.
 func _build_lane_guides() -> void:
 	var faint := _emissive(Color(0.7, 0.8, 1.0), 0.05, 0.12)
-	var split := _emissive(COLOR_YOU, 0.35, 0.3)
+	var split := _emissive(Color(0.9, 0.97, 1.0), 0.35, 0.3)
+	# Each lane's floor carries a breath of its finger's colour all the way down the road.
+	for lane: int in KeyMap.COUNT:
+		var tint := MeshInstance3D.new()
+		tint.mesh = _box
+		tint.material_override = _emissive(KeyMap.color_for(lane), 0.25, 0.07)
+		tint.scale = Vector3(KEY_WIDTH * 0.94, 0.008, LENGTH + 4.0)
+		tint.position = Vector3(lane_x(lane), 0.008, -(LENGTH + 4.0) * 0.5)
+		add_child(tint)
 	for edge: int in range(1, KeyMap.COUNT):
 		var guide := MeshInstance3D.new()
 		guide.mesh = _box
@@ -454,7 +488,7 @@ func _build_effects() -> void:
 		add_child(sparks)
 		_sparks.append(sparks)
 	_hold_light = OmniLight3D.new()
-	_hold_light.light_color = COLOR_YOU
+	_hold_light.light_color = Color(0.85, 0.95, 1.0)
 	_hold_light.light_energy = 3.5
 	_hold_light.omni_range = 9.0
 	_hold_light.position = Vector3(0, 1.4, -0.6)

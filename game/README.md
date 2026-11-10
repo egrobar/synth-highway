@@ -23,13 +23,19 @@ godot --path game          # or tools/godot.sh, which also serialises concurrent
 Title → the route → drive → results. The route is one screen: regions along the top (← →), the
 region's songs below (↑ ↓), the selected song's details on the right, Tab for Easy or Normal, Enter to
 drive. Everything is clickable too. Results offer Enter for the next song, Space to drive again, Esc
-for the route. C on the title screen runs the timing check. In a drive, Space or Esc pauses; resuming
-counts in three beats.
+for the route. In a drive, Space or Esc pauses; resuming counts in three beats.
+
+**Practice** (P on the route, or on the results screen after running out of gas): the song cannot
+fail, plays at 100%, 85% or 70% speed with the pitch corrected, and is never saved. **Settings** (S on
+the title or the route): music and effects volume, note speed, letters on notes, beat flashes and
+camera movement, fullscreen, and the timing check. A player with no saved runs starts on Easy.
 
 **Every song is played on the home row**: `A S D F G H J K L ;`. Fingers rest on A S D F and J K L ;,
 and the index fingers reach for G and H, so your hands never move between songs. Each note's lane
 follows the melody's shape, one scale step per lane. Easy uses only the eight resting keys; Normal
-adds G and H only when a melody needs more than eight steps.
+adds G and H only when a melody needs more than eight steps. Notes, lanes and keys are coloured by
+the finger that plays them, mirrored across the hands: violet pinky, yellow ring, green middle, cyan
+index (`scripts/key_map.gd`). Sharps stay orange.
 
 ## Load your own song
 
@@ -60,7 +66,13 @@ YOUR SONG (X twice moves it to the Trash).
   are holds. Holding earns points continuously, releasing in the last 150 ms counts as complete, and
   letting go early keeps what you earned, costs some fuel and cuts the melody, but keeps your combo.
 - **Fuel:** misses and wrong keys drain it, hits refill it. Low fuel dims and flickers the headlights,
-  and empty ends the run. The song's tempo never changes. No seeking and no speed control in a run.
+  and empty ends the run. Mistakes on Easy cost about half the fuel. No seeking and no speed control in
+  a scored run.
+- **Feel:** each beat flares the glow, the road's edge lines and the hit line; the combo heats the
+  world up (faster scenery, a slightly wider view); a miss jolts the camera; combos of 25, 50, 100...
+  are called out. All of it is display only and switches off in Settings.
+- **Results** show how early or late you typically press and the keys you slipped on most; out of
+  gas, how far you got.
 - **Difficulty:** Easy is generated from Normal by `tools/song/songlib.py`: at least a beat and a
   quarter between notes, keeping holds and on-beat notes first.
 

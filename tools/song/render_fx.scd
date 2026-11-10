@@ -1,5 +1,5 @@
 // Renders the shared sound effects and one region's ambience bed, offline.
-//   sclang render_fx.scd sfx <outDir>                       click, wrong, ui, held, out_of_gas
+//   sclang render_fx.scd sfx <outDir>                       click, wrong, ui, held, milestone, clear, out_of_gas
 //   sclang render_fx.scd ambience <ambience.scd> <out.wav>  22 s raw bed; make_loop.py makes it loop
 //
 // A region's ambience.scd assigns one SynthDef named \ambience to ~ambience.
@@ -39,6 +39,9 @@ if(mode == "sfx") {
 		["sfx_wrong", [head.(0.001, \thunk)], 0.25],
 		["sfx_ui", [head.(0.001, \click, \freq, 760, \amp, 0.3)], 0.1],
 		["sfx_held", [head.(0.001, \chime, \freq, 784), head.(0.075, \chime, \freq, 1175)], 0.7],
+		// A combo milestone: two soft rising notes. A run that set a new best or opened a road: a short arpeggio.
+		["sfx_milestone", [head.(0.001, \chime, \freq, 1047, \amp, 0.16), head.(0.07, \chime, \freq, 1568, \amp, 0.16)], 0.7],
+		["sfx_clear", [523, 659, 784, 1047].collect { |f, i| head.(0.001 + (i * 0.11), \chime, \freq, f, \amp, 0.2) }, 1.1],
 		["sfx_out_of_gas", [0.03, 0.34, 0.74, 1.3, 2.05].collect { |t, i| head.(t, \cough, \amp, 0.7 - (i * 0.1), \len, 0.16 + (i * 0.05)) }, 2.7],
 	];
 	var run = { |i| if(i >= jobs.size) { 0.exit } { render.(sfxDefs, jobs[i][1], jobs[i][2], dir ++ jobs[i][0] ++ ".wav", { run.(i + 1) }) } };

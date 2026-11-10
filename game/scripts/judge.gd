@@ -23,6 +23,9 @@ const FUEL_ON_HOLD_COMPLETE := 0.02
 const FUEL_ON_MISS := -0.07
 const FUEL_ON_WRONG := -0.02
 const FUEL_ON_HOLD_DROP := -0.03
+## Easy is where a new player learns the layout: mistakes there cost about half the fuel,
+## so a rough first minute does not end the song (14 straight misses did, on Normal's numbers).
+const EASY_FUEL_COST := 0.55
 
 signal note_hit(note: Chart.Note, verdict: String, offset: float)
 signal note_missed(note: Chart.Note)
@@ -41,6 +44,9 @@ var wrong_presses: int = 0
 var holds_completed: int = 0
 var holds_dropped: int = 0
 var fuel: float = 1.0
+## Practice runs: the tank never drains, so the song always plays to the end.
+var no_fail: bool = false
+var _fuel_cost: float = 1.0
 
 var _points: float = 0.0
 var _first_open: int = 0
@@ -51,6 +57,8 @@ var _fuel_spent: bool = false
 func _init(chart: Chart) -> void:
 	notes = chart.notes
 	chart.reset()
+	if chart.difficulty == "easy":
+		_fuel_cost = EASY_FUEL_COST
 
 
 func score() -> int:
@@ -198,7 +206,9 @@ func _finish_hold(source: Variant, n: Chart.Note, completed: bool) -> void:
 
 
 func _add_fuel(amount: float) -> void:
-	fuel = clampf(fuel + amount, 0.0, 1.0)
+	if no_fail:
+		return
+	fuel = clampf(fuel + (amount * _fuel_cost if amount < 0.0 else amount), 0.0, 1.0)
 	if fuel <= 0.0 and not _fuel_spent:
 		_fuel_spent = true
 		ran_out_of_fuel.emit()

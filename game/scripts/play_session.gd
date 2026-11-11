@@ -547,14 +547,14 @@ func _build_hud() -> void:
 	var score_caption := Ui.label("SCORE", 18, Ui.MUTED)
 	Ui.anchor(score_caption, 1.0, 0.0, 1.0, 0.0, -260, 22, -32, 46, HORIZONTAL_ALIGNMENT_RIGHT)
 	_hud.add_child(score_caption)
-	_score_label = Ui.label("0", 46, Ui.TEXT)
+	_score_label = Ui.heading("0", 46, Ui.TEXT)
 	Ui.anchor(_score_label, 1.0, 0.0, 1.0, 0.0, -360, 42, -32, 104, HORIZONTAL_ALIGNMENT_RIGHT)
 	_hud.add_child(_score_label)
 
 	var combo_caption := Ui.label("COMBO", 18, Ui.MUTED)
 	Ui.anchor(combo_caption, 0.0, 0.0, 0.0, 0.0, 32, 22, 260, 46)
 	_hud.add_child(combo_caption)
-	_combo_label = Ui.label("0", 46, Ui.ACCENT)
+	_combo_label = Ui.heading("0", 46, Ui.ACCENT)
 	Ui.anchor(_combo_label, 0.0, 0.0, 0.0, 0.0, 32, 42, 180, 104)
 	_hud.add_child(_combo_label)
 	_multiplier_label = Ui.label("x1.0", 24, Ui.MUTED)
@@ -573,11 +573,11 @@ func _build_hud() -> void:
 	_fuel_bar.anchor_right = 1.0
 	gas_track.add_child(_fuel_bar)
 
-	_judgement = Ui.label("", 58, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	_judgement = Ui.heading("", 58, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(_judgement, 0.5, 0.26, 0.5, 0.26, -300, -40, 300, 40, HORIZONTAL_ALIGNMENT_CENTER)
 	_judgement.modulate.a = 0.0
 	_hud.add_child(_judgement)
-	_milestone_label = Ui.label("", 44, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	_milestone_label = Ui.heading("", 44, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(_milestone_label, 0.5, 0.15, 0.5, 0.15, -300, -30, 300, 30, HORIZONTAL_ALIGNMENT_CENTER)
 	_milestone_label.modulate.a = 0.0
 	_hud.add_child(_milestone_label)
@@ -589,7 +589,7 @@ func _build_hud() -> void:
 		Ui.anchor(tag, 0.0, 0.0, 1.0, 0.0, 0, 22, 0, 52, HORIZONTAL_ALIGNMENT_CENTER)
 		_hud.add_child(tag)
 
-	_center_label = Ui.label("", 120, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	_center_label = Ui.heading("", 120, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(_center_label, 0.5, 0.42, 0.5, 0.42, -500, -90, 500, 90, HORIZONTAL_ALIGNMENT_CENTER)
 	_center_label.visible = false
 	_hud.add_child(_center_label)

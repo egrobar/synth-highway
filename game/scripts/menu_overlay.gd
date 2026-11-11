@@ -33,18 +33,16 @@ func setup(title: String, items: Array[Dictionary], cancel: Callable, accent: Co
 	add_child(Ui.dim_panel(0.82))
 	var block: float = items.size() * (ROW_HEIGHT + ROW_GAP) - ROW_GAP
 	var top: float = -block * 0.5 + 40.0
+	# The region's own panel (Ui.STYLES): its corners, border and fill, made nearly opaque.
 	var card := Panel.new()
-	var card_box := StyleBoxFlat.new()
-	card_box.bg_color = Color(0.02, 0.03, 0.07, 0.96)
-	card_box.set_corner_radius_all(18)
-	card_box.set_border_width_all(1)
-	card_box.border_color = Color(accent, 0.45)
+	var card_box: StyleBoxFlat = Ui.card_style(false)
+	card_box.bg_color = Color(card_box.bg_color, 0.97)
 	card.add_theme_stylebox_override("panel", card_box)
 	var bottom: float = top + block + (74.0 if not note.is_empty() else 34.0)
 	Ui.anchor(card, 0.5, 0.5, 0.5, 0.5, -ROW_WIDTH * 0.5 - 40.0, top - 140.0, ROW_WIDTH * 0.5 + 40.0, bottom)
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(card)
-	var heading := Ui.label(title, 64, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	var heading := Ui.heading(title, 64, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.5, 1.0, 0.5, 0, top - 120.0, 0, top - 36.0, HORIZONTAL_ALIGNMENT_CENTER)
 	add_child(heading)
 	for i: int in items.size():
@@ -57,7 +55,7 @@ func setup(title: String, items: Array[Dictionary], cancel: Callable, accent: Co
 		Ui.anchor(text, 0.0, 0.0, 1.0, 1.0, 24, 8, -110, -8)
 		row.add_child(text)
 		if items[i].has("key_text"):
-			var key := Ui.label(str(items[i]["key_text"]), 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
+			var key := Ui.caption(str(items[i]["key_text"]), 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
 			Ui.anchor(key, 0.0, 0.0, 1.0, 1.0, 0, 16, -22, -14, HORIZONTAL_ALIGNMENT_RIGHT)
 			row.add_child(key)
 		row.mouse_entered.connect(_select.bind(i))
@@ -110,9 +108,4 @@ func _activate(i: int) -> void:
 func _refresh() -> void:
 	for i: int in _rows.size():
 		var on: bool = i == _index
-		var box := StyleBoxFlat.new()
-		box.bg_color = Color(_accent, 0.22) if on else Color(0.06, 0.07, 0.13, 1.0)
-		box.set_corner_radius_all(12)
-		box.set_border_width_all(2 if on else 1)
-		box.border_color = _accent if on else Color(1, 1, 1, 0.12)
-		_rows[i].add_theme_stylebox_override("panel", box)
+		_rows[i].add_theme_stylebox_override("panel", Ui.card_style(on, _accent))

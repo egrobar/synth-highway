@@ -35,9 +35,6 @@ const CALIBRATE_INTERVAL := 0.6
 const CALIBRATE_SKIP := 2
 const SHOT_TIMES: Array[float] = [-1.0, 9.0, 12.2, 33.0, 60.0]
 const SFX_NAMES: Array[String] = ["click", "wrong", "ui", "held", "out_of_gas", "milestone", "clear"]
-const SONG_ROWS := 7
-const ROW_HEIGHT := 62.0
-const LIST_TOP := 196.0
 const AUDIO_FILTERS := "*.mp3, *.wav, *.flac, *.ogg, *.aiff, *.aif, *.mid, *.midi ; Songs (audio or MIDI)"
 
 var _screen: Screen = Screen.TITLE
@@ -248,6 +245,9 @@ func _click() -> void:
 
 
 func _clear_ui() -> void:
+	# Every screen is styled after the region in view (Ui.STYLES), like its song-select skin.
+	Ui.use_region(str(_regions[_region_index]["id"]))
+	get_viewport().disable_3d = false
 	for child: Node in _ui.get_children():
 		child.queue_free()
 	_menu = null
@@ -274,7 +274,7 @@ func _accent(region: Dictionary) -> Color:
 
 
 func _hint(text: String) -> void:
-	var hint := Ui.label(text, 24, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+	var hint := Ui.caption(text, 22, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(hint)
 
@@ -384,146 +384,101 @@ func _show_route(message: String = "") -> void:
 	_clear_ui()
 	_screen = Screen.ROUTE
 	var region: Dictionary = _regions[_region_index]
-	var accent: Color = _accent(region)
-	var unlocked: bool = _region_unlocked(_region_index)
-	_show_world(region["id"])
-	_ambient.volume_db = -9.0
 	_songs = SongLibrary.in_region(region["id"])
-	_ui.add_child(Ui.dim_panel(0.4))
+	# The song select is a full-screen illustrated skin (RouteScreen; the Song Select Redesigns
+	# canvas), so the 3D world is neither built nor drawn behind it: switching regions here
+	# no longer rebuilds a whole world. The region's ambience still plays.
+	_play_ambience(region["id"])
+	_ambient.volume_db = -9.0
+	get_viewport().disable_3d = true
+	var screen := RouteScreen.new()
+	screen.acted.connect(_on_route_action)
+	_ui.add_child(screen)
+	screen.present(_route_skin(str(region["id"])), _route_model(message))
 
-	# Regions along the top. The world behind always shows the selected one.
-	var count: int = _regions.size()
-	var tab_w: float = 270.0
-	var gap: float = 14.0
-	var left: float = -(count * tab_w + (count - 1) * gap) * 0.5
-	for i: int in count:
-		_ui.add_child(_region_tab(i, left + i * (tab_w + gap), tab_w))
-	var about_text: String = "%s   ·   %s" % [region.get("genres", ""), region.get("blurb", "")]
-	if not unlocked:
-		about_text = "Locked: clear any song in %s to open this road." % _regions[_region_index - 1]["name"]
-	var about := Ui.label(about_text, 24, Ui.TEXT if unlocked else Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(about, 0.0, 0.0, 1.0, 0.0, 0, 128, 0, 160, HORIZONTAL_ALIGNMENT_CENTER)
-	_ui.add_child(about)
 
-	# The region's songs on the left, the selected song in detail on the right.
+## Each region's song-select skin (scripts/ui/skins/). A region without one yet borrows Red Frontier's.
+const ROUTE_SKINS := {
+	"backroads": "res://scripts/ui/skins/frontier.gd", "neon": "res://scripts/ui/skins/neon.gd",
+	"coast": "res://scripts/ui/skins/tide.gd", "mesa": "res://scripts/ui/skins/io.gd", "aurora": "res://scripts/ui/skins/ring.gd",
+}
+
+
+func _route_skin(region_id: String) -> RouteSkin:
+	var path: String = str(ROUTE_SKINS.get(region_id, ""))
+	if path.is_empty() or not ResourceLoader.exists(path):
+		path = str(ROUTE_SKINS["backroads"])
+	return (load(path) as GDScript).new()
+
+
+## Everything the skin draws (the model is documented in RouteSkin).
+func _route_model(message: String) -> Dictionary:
+	var region: Dictionary = _regions[_region_index]
+	var unlocked: bool = _region_unlocked(_region_index)
+	var tabs: Array = []
+	for i: int in _regions.size():
+		var other: Dictionary = _regions[i]
+		var songs: Array[Dictionary] = SongLibrary.in_region(other["id"])
+		var cleared: int = 0
+		for song: Dictionary in songs:
+			if _save.cleared(song["id"]):
+				cleared += 1
+		tabs.append({"num": i + 1, "name": other["name"], "upper": str(other["name"]).to_upper(), "cleared": cleared,
+			"total": songs.size(), "locked": not _region_unlocked(i), "selected": i == _region_index})
 	var selected: int = _selected_index()
-	var first: int = clampi(selected - SONG_ROWS / 2, 0, maxi(0, _songs.size() - SONG_ROWS))
-	var shown: int = 0
-	for row: int in range(first, mini(first + SONG_ROWS, _songs.size())):
-		_ui.add_child(_song_row(row, row == selected, LIST_TOP + shown * (ROW_HEIGHT + 8.0), accent, unlocked))
-		shown += 1
-	if _songs.is_empty():
-		var empty := Ui.label("No songs here yet.", 30, Ui.TEXT)
-		Ui.anchor(empty, 0.5, 0.0, 0.5, 0.0, -720, LIST_TOP + 12, 0, LIST_TOP + 56)
-		_ui.add_child(empty)
-	var load_y: float = LIST_TOP + maxi(shown, 1) * (ROW_HEIGHT + 8.0) + 6.0
-	var load_row := Ui.card(false, accent)
-	Ui.anchor(load_row, 0.5, 0.0, 0.5, 0.0, -720, load_y, -80, load_y + 54)
-	var load_label := Ui.label("+  Load your own song (L)", 26, Ui.ACCENT)
-	Ui.anchor(load_label, 0.0, 0.0, 1.0, 1.0, 22, 10, 0, -8)
-	load_row.add_child(load_label)
-	_on_click(load_row, _open_file_picker)
-	_ui.add_child(load_row)
+	var rows: Array = []
+	for slot: int in 7:
+		var index: int = selected - 3 + slot
+		if index < 0 or index >= _songs.size():
+			rows.append({})
+			continue
+		var song: Dictionary = _songs[index]
+		rows.append({"index": index, "n": "%02d" % (index + 1), "title": song["title"], "upper": str(song["title"]).to_upper(),
+			"grades": _grades_text(song), "level": SongLibrary.level_of(song, _difficulty), "selected": index == selected,
+			"imported": song["source"] == "imported", "freq": _dial_frequency(index, _songs.size())})
+	var detail: Dictionary = {}
+	var cards: Array = []
 	if not _songs.is_empty():
-		_ui.add_child(_song_detail(_songs[selected], accent, unlocked))
-	_hint("← →  region      ↑ ↓  song      TAB  difficulty      P  practice      ENTER  drive      ESC  menu")
-	if not message.is_empty():
-		_show_toast(message)
+		var song: Dictionary = _songs[selected]
+		var length: int = int(round(float(song["duration"])))
+		detail = {"title": song["title"], "upper": str(song["title"]).to_upper(), "bpm": int(round(float(song["bpm"]))),
+			"length": "%d:%02d" % [length / 60, length % 60], "number": selected + 1,
+			"best": str(_save.best_for(song["id"], _difficulty).get("grade", "")), "imported": song["source"] == "imported",
+			"remove_armed": _remove_armed_until > Time.get_ticks_msec(), "station": str(song.get("station", ""))}
+		cards = _difficulty_cards(song)
+	var practising: bool = _practice_step > 0
+	return {
+		"regions": tabs,
+		"region": {"name": region["name"], "upper": str(region["name"]).to_upper(), "genres": region.get("genres", ""),
+			"blurb": region.get("blurb", ""), "locked": not unlocked,
+			"locked_text": "Locked: clear any song in %s to open this road." % _regions[maxi(_region_index - 1, 0)]["name"]},
+		"rows": rows, "count": _songs.size(), "song": detail, "cards": cards,
+		"practice": {"on": practising, "text": ("%d%% speed" % int(round(PRACTICE_SPEEDS[_practice_step] * 100.0))) if practising else "off"},
+		"locked": not unlocked, "message": message,
+	}
 
 
-func _region_tab(index: int, x: float, width: float) -> Control:
-	var region: Dictionary = _regions[index]
-	var selected: bool = index == _region_index
-	var unlocked: bool = _region_unlocked(index)
-	var accent: Color = _accent(region)
-	var tab := Ui.card(selected, accent)
-	Ui.anchor(tab, 0.5, 0.0, 0.5, 0.0, x, 28, x + width, 112)
-	var name := Ui.label("%d  %s" % [index + 1, str(region["name"]).to_upper()], 26, accent if unlocked else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(name, 0.0, 0.0, 1.0, 0.0, 6, 10, -6, 46, HORIZONTAL_ALIGNMENT_CENTER)
-	tab.add_child(name)
-	var songs: Array[Dictionary] = SongLibrary.in_region(region["id"])
-	var cleared: int = 0
-	for song: Dictionary in songs:
-		if _save.cleared(song["id"]):
-			cleared += 1
-	var status_text: String = "LOCKED" if not unlocked else "%d of %d cleared" % [cleared, songs.size()]
-	var status := Ui.label(status_text, 20, Ui.WARM if not unlocked else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(status, 0.0, 0.0, 1.0, 0.0, 6, 46, -6, 74, HORIZONTAL_ALIGNMENT_CENTER)
-	tab.add_child(status)
-	_on_click(tab, func() -> void:
-		if index != _region_index:
-			_region_index = index
-			_click()
-			_show_route())
-	return tab
-
-
-func _song_row(index: int, selected: bool, y: float, accent: Color, unlocked: bool) -> Control:
-	var song: Dictionary = _songs[index]
-	var row := Ui.card(selected, accent)
-	Ui.anchor(row, 0.5, 0.0, 0.5, 0.0, -720, y, -80, y + ROW_HEIGHT)
-	if not unlocked:
-		row.modulate.a = 0.55
-	var title := Ui.label(str(song["title"]), 28, Ui.TEXT)
-	Ui.anchor(title, 0.0, 0.0, 0.6, 1.0, 22, 6, 0, -6)
-	title.clip_text = true
-	row.add_child(title)
-	# The song's level at the difficulty being browsed (Difficulty), coloured green to red.
-	var song_level: int = SongLibrary.level_of(song, _difficulty)
-	var badge := Ui.label("Lv %d" % song_level, 24, Difficulty.colour_of(song_level), HORIZONTAL_ALIGNMENT_RIGHT)
-	Ui.anchor(badge, 0.6, 0.0, 0.72, 1.0, 0, 12, -4, -10, HORIZONTAL_ALIGNMENT_RIGHT)
-	row.add_child(badge)
-	if song["source"] == "imported":
-		Ui.anchor(title, 0.0, 0.0, 0.6, 1.0, 22, 0, 0, -20)
-		var tag := Ui.label("YOUR SONG", 16, Ui.WARM)
-		Ui.anchor(tag, 0.0, 1.0, 0.0, 1.0, 24, -24, 200, -2)
-		row.add_child(tag)
-	var bests: Array[String] = []
+## "E– N–", with each difficulty's best grade in place of the dash once it has one.
+func _grades_text(song: Dictionary) -> String:
+	var parts: Array[String] = []
 	for level: String in Chart.DIFFICULTIES:
-		bests.append("%s %s" % [level.left(1).to_upper(), str(_save.best_for(song["id"], level).get("grade", "–"))])
-	var grades := Ui.label("    ".join(bests), 24, Ui.WARM, HORIZONTAL_ALIGNMENT_RIGHT)
-	Ui.anchor(grades, 0.72, 0.0, 1.0, 1.0, 0, 12, -20, -10, HORIZONTAL_ALIGNMENT_RIGHT)
-	row.add_child(grades)
-	if selected and _remove_armed_until > Time.get_ticks_msec():
-		title.text = "Press X again to move it to the Trash"
-		title.add_theme_color_override("font_color", Ui.WARM)
-	_on_click(row, func() -> void:
-		if selected:
-			_drive_selected()
-		else:
-			_choose_song(index)
-			_click()
-			_show_route())
-	return row
+		var grade: String = str(_save.best_for(song["id"], level).get("grade", ""))
+		parts.append("%s%s" % [level.left(1).to_upper(), (" " + grade) if not grade.is_empty() else RouteSkin.DASH])
+	return " ".join(parts)
 
 
-func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
-	var card := Ui.card(true, accent)
-	Ui.anchor(card, 0.5, 0.0, 0.5, 0.0, -50, LIST_TOP, 720, LIST_TOP + 466)
-	# One line: a two-line title box left a hole under every short title.
-	var title := Ui.label(str(song["title"]), 38, Ui.TEXT)
-	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	Ui.anchor(title, 0.0, 0.0, 1.0, 0.0, 28, 16, -28, 64)
-	card.add_child(title)
-	var length: int = int(round(float(song["duration"])))
-	var facts: String = "%d BPM   ·   %d:%02d" % [int(round(float(song["bpm"]))), length / 60, length % 60]
-	if not str(song.get("station", "")).is_empty():
-		facts += "   ·   on %s" % song["station"]
-	if song["source"] == "imported":
-		facts += "   ·   your song"
-	var info := Ui.label(facts, 24, Ui.MUTED)
-	Ui.anchor(info, 0.0, 0.0, 1.0, 0.0, 28, 66, -28, 96)
-	card.add_child(info)
+## Red Frontier lists songs as stations on an AM dial: 540 to 1600, spread over the region's songs.
+func _dial_frequency(index: int, count: int) -> String:
+	var t: float = float(index) / maxf(float(count - 1), 1.0)
+	return str(int(round(lerpf(540.0, 1600.0, t) / 10.0)) * 10)
 
-	# Easy and Normal side by side; TAB or a click switches.
+
+## The Easy and Normal cards: level, notes and holds, which keys, and what makes it hard.
+func _difficulty_cards(song: Dictionary) -> Array:
+	var cards: Array = []
 	var meta: Dictionary = Chart.read_meta(song["path"])
 	var levels: Dictionary = meta.get("difficulties", {})
-	for i: int in Chart.DIFFICULTIES.size():
-		var level: String = Chart.DIFFICULTIES[i]
-		var on: bool = level == _difficulty
-		var chip := Ui.card(on, accent)
-		var x: float = 28.0 + i * 352.0
-		Ui.anchor(chip, 0.0, 0.0, 0.0, 0.0, x, 112, x + 336, 286)
+	for level: String in Chart.DIFFICULTIES:
 		var notes: Array = levels.get(level, [])
 		var holds: int = 0
 		var reach: bool = false
@@ -535,75 +490,51 @@ func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 				sharps += 1
 			elif KeyMap.REACH.has(int(n.get("l", 0))):
 				reach = true
-		var head := Ui.label(level.to_upper(), 28, accent if on else Ui.MUTED)
-		Ui.anchor(head, 0.0, 0.0, 1.0, 0.0, 18, 10, -18, 46)
-		chip.add_child(head)
-		var rating: Dictionary = (song.get("ratings", {}) as Dictionary).get(level, {})
-		var chart_level: int = Difficulty.level_of(rating)
-		var level_label := Ui.label("LEVEL %d" % chart_level, 26, Difficulty.colour_of(chart_level), HORIZONTAL_ALIGNMENT_RIGHT)
-		Ui.anchor(level_label, 0.0, 0.0, 1.0, 0.0, 18, 12, -18, 46, HORIZONTAL_ALIGNMENT_RIGHT)
-		chip.add_child(level_label)
-		var best: Dictionary = _save.best_for(song["id"], level)
-		var best_text: String = "Best  %s   %d" % [best["grade"], int(best["score"])] if not best.is_empty() else "Not driven yet"
-		var best_label := Ui.label(best_text, 24, Ui.WARM if not best.is_empty() else Ui.MUTED)
-		Ui.anchor(best_label, 0.0, 0.0, 1.0, 0.0, 18, 48, -18, 80)
-		chip.add_child(best_label)
-		var shape := Ui.label("%d notes, %d holds" % [notes.size(), holds], 22, Ui.TEXT)
-		Ui.anchor(shape, 0.0, 0.0, 1.0, 0.0, 18, 82, -18, 110)
-		chip.add_child(shape)
-		var keys_text: String = "8 resting keys"
+		var keys: String = "8 resting keys"
 		if sharps > 0:
-			keys_text = "10 keys + %d sharps on the top row" % sharps
+			keys = "10 keys + %d sharp%s on the top row" % [sharps, "" if sharps == 1 else "s"]
 		elif reach:
-			keys_text = "10 keys: adds G and H"
-		var keys := Ui.label(keys_text, 20, Color(1.0, 0.62, 0.25) if sharps > 0 else Ui.MUTED)
-		Ui.anchor(keys, 0.0, 0.0, 1.0, 0.0, 18, 108, -18, 134)
-		chip.add_child(keys)
-		# What makes it hard, in a few words (Difficulty._reasons).
+			keys = "10 keys, adds G and H"
+		var rating: Dictionary = (song.get("ratings", {}) as Dictionary).get(level, {})
 		var reasons: Array = rating.get("reasons", [])
-		var why_text: String = "Steady and even"
+		var feel: String = "Steady and even"
 		if not reasons.is_empty():
-			why_text = ", ".join(reasons)
-			why_text = why_text.left(1).to_upper() + why_text.substr(1)
-		var why := Ui.label(why_text, 20, Difficulty.colour_of(chart_level))
-		why.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		Ui.anchor(why, 0.0, 0.0, 1.0, 0.0, 18, 138, -18, 164)
-		chip.add_child(why)
-		_on_click(chip, func() -> void:
-			if _difficulty != level:
-				_difficulty = level
-				_click()
-				_show_route())
-		card.add_child(chip)
+			feel = ", ".join(reasons)
+			feel = feel.left(1).to_upper() + feel.substr(1)
+		var counts: String = "%d note%s · %d hold%s" % [notes.size(), "" if notes.size() == 1 else "s", holds, "" if holds == 1 else "s"]
+		cards.append({"name": level.to_upper(), "level": Difficulty.level_of(rating), "notes": notes.size(), "holds": holds, "counts": counts,
+			"keys": keys, "sharps": sharps, "feel": feel, "selected": level == _difficulty,
+			"best": str(_save.best_for(song["id"], level).get("grade", ""))})
+	return cards
 
-	# Practice, stepped through with P: off, then no-fail runs at full, 85% and 70% speed.
-	var practising: bool = _practice_step > 0
-	var practice_text: String = "Practice: off"
-	if practising:
-		practice_text = "Practice: %d%% speed  ·  no fail  ·  not scored" % int(round(PRACTICE_SPEEDS[_practice_step] * 100.0))
-	var practice := Ui.card(practising, Ui.WARM)
-	Ui.anchor(practice, 0.0, 0.0, 1.0, 0.0, 28, 298, -28, 338)
-	var practice_label := Ui.label(practice_text, 22, Ui.WARM if practising else Ui.MUTED)
-	Ui.anchor(practice_label, 0.0, 0.0, 1.0, 1.0, 16, 7, -60, -5)
-	practice.add_child(practice_label)
-	var practice_key := Ui.label("P", 22, Ui.MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
-	Ui.anchor(practice_key, 0.0, 0.0, 1.0, 1.0, 0, 7, -16, -5, HORIZONTAL_ALIGNMENT_RIGHT)
-	practice.add_child(practice_key)
-	_on_click(practice, _step_practice)
-	card.add_child(practice)
-	var drive := Ui.card(unlocked, accent)
-	Ui.anchor(drive, 0.0, 0.0, 1.0, 0.0, 28, 350, -28, 424)
-	var drive_text: String = ("ENTER   PRACTISE" if practising else "ENTER   DRIVE") if unlocked else "LOCKED"
-	var drive_label := Ui.label(drive_text, 38, accent if unlocked else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(drive_label, 0.0, 0.0, 1.0, 1.0, 0, 14, 0, -12, HORIZONTAL_ALIGNMENT_CENTER)
-	drive.add_child(drive_label)
-	_on_click(drive, _drive_selected)
-	card.add_child(drive)
-	if song["source"] == "imported":
-		var remove := Ui.label("X  remove this song", 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-		Ui.anchor(remove, 0.0, 0.0, 1.0, 0.0, 0, 430, 0, 456, HORIZONTAL_ALIGNMENT_CENTER)
-		card.add_child(remove)
-	return card
+
+func _on_route_action(action: String, arg: Variant) -> void:
+	match action:
+		"region":
+			if int(arg) != _region_index:
+				_region_index = int(arg)
+				_remove_armed_until = 0
+				_click()
+				_show_route()
+		"song":
+			if int(arg) == _selected_index():
+				_drive_selected()
+			else:
+				_choose_song(int(arg))
+				_click()
+				_show_route()
+		"difficulty":
+			if _difficulty != str(arg):
+				_difficulty = str(arg)
+				_click()
+				_show_route()
+		"practice":
+			_step_practice()
+		"drive":
+			_drive_selected()
+		"load":
+			_open_file_picker()
+
 
 
 func _route_key(code: Key) -> void:
@@ -666,7 +597,7 @@ func _open_menu() -> void:
 			_close_menu()
 			_show_title()})
 	items.append({"text": "Quit game", "key": KEY_Q, "key_text": "Q", "action": func() -> void: get_tree().quit()})
-	_menu = MenuOverlay.new().setup("MENU", items, _close_menu, _accent(_regions[_region_index]), "", _click)
+	_menu = MenuOverlay.new().setup("MENU", items, _close_menu, Ui.ACCENT, "", _click)
 	_ui.add_child(_menu)
 
 
@@ -699,6 +630,7 @@ func _try_remove() -> void:
 		_remove_armed_until = 0
 		var song: Dictionary = _songs[_selected_index()]
 		var err: Error = SongLibrary.remove_import(song)
+		SongLibrary.invalidate()
 		_choose_song(_selected_index() - 1)
 		_show_route("Moved \"%s\" to the Trash" % song["title"] if err == OK else "Could not remove that song")
 	else:
@@ -732,7 +664,7 @@ func _show_import_form(file: String) -> void:
 	_screen = Screen.IMPORT
 	_import_file = file
 	_ui.add_child(Ui.dim_panel(0.7))
-	var heading := Ui.label("LOAD YOUR SONG", 54, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	var heading := Ui.heading("LOAD YOUR SONG", 54, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 120, 0, 190, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(heading)
 	var name := Ui.label(file.get_file(), 26, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
@@ -788,7 +720,7 @@ func _begin_import(file: String, title: String, region: String) -> void:
 	if title.is_empty():
 		title = file.get_file().get_basename()
 	_ui.add_child(Ui.dim_panel(0.7))
-	var heading := Ui.label(title, 54, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	var heading := Ui.heading(title, 54, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 220, 0, 290, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(heading)
 	var track := ColorRect.new()
@@ -815,6 +747,7 @@ func _on_import_progress(fraction: float, message: String) -> void:
 
 
 func _on_import_finished(chart_path: String) -> void:
+	SongLibrary.invalidate()
 	var meta: Dictionary = Chart.read_meta(chart_path)
 	_select_song_id(str(meta.get("id", "")))
 	var levels: Dictionary = meta.get("difficulties", {})
@@ -950,17 +883,14 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> v
 	_ui.add_child(Ui.dim_panel())
 	# The run's numbers sit on a solid card, so the keyboard and lanes behind never read through them.
 	var sheet := Panel.new()
-	var sheet_box := StyleBoxFlat.new()
-	sheet_box.bg_color = Color(0.02, 0.03, 0.07, 0.94)
-	sheet_box.set_corner_radius_all(20)
-	sheet_box.set_border_width_all(1)
-	sheet_box.border_color = Color(_accent(_regions[_region_index]), 0.45)
+	var sheet_box: StyleBoxFlat = Ui.card_style(true)
+	sheet_box.bg_color = Color(Ui.card_style(false).bg_color, 0.96)
 	sheet.add_theme_stylebox_override("panel", sheet_box)
 	Ui.anchor(sheet, 0.5, 0.0, 0.5, 0.0, -600, 70, 600, 650)
 	sheet.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ui.add_child(sheet)
 	var failed: bool = result["failed"]
-	var heading := Ui.label("OUT OF GAS" if failed else str(result["title"]), 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	var heading := Ui.heading("OUT OF GAS" if failed else str(result["title"]), 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 96, 0, 176, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(heading)
 	var practice: bool = result.get("practice", false)
@@ -973,7 +903,7 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> v
 	Ui.anchor(level, 0.0, 0.0, 1.0, 0.0, 0, 176, 0, 208, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(level)
 	var grade_text: String = "%d%%" % int(round(float(result.get("progress", 0.0)) * 100.0)) if failed else str(result["grade"])
-	var grade := Ui.label(grade_text, 190, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	var grade := Ui.heading(grade_text, 190, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(grade, 0.0, 0.0, 1.0, 0.0, 0, 200, 0, 440, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(grade)
 	var summary: String = "Score %d     Accuracy %d%%     Max combo %d" % [
@@ -1034,7 +964,7 @@ func _show_settings() -> void:
 	_clear_ui()
 	_screen = Screen.SETTINGS
 	_ui.add_child(Ui.dim_panel(0.72))
-	var heading := Ui.label("SETTINGS", 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	var heading := Ui.heading("SETTINGS", 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 70, 0, 150, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(heading)
 	for i: int in SETTING_ROWS.size():
@@ -1128,7 +1058,7 @@ func _show_calibration() -> void:
 	_calib_taps.clear()
 	_calib_start_usec = Time.get_ticks_usec() + 1200000
 	_ui.add_child(Ui.dim_panel())
-	var heading := Ui.label("TIMING CHECK", 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	var heading := Ui.heading("TIMING CHECK", 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.3, 1.0, 0.3, 0, 0, 0, 80, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(heading)
 	var note := Ui.label("Press SPACE exactly when you hear each click.", 32, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)

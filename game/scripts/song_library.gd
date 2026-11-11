@@ -10,7 +10,16 @@ const USER_DIR := "user://songs"
 static var _rating_cache: Dictionary = {}
 
 
+## The library is read once and kept: the route screen asks for it several times on every key
+## press, and reading ~95 chart files each time stalled it. invalidate() after an import or a
+## removal.
+static var _cached: Array[Dictionary] = []
+static var _cached_ok: bool = false
+
+
 static func all() -> Array[Dictionary]:
+	if _cached_ok:
+		return _cached
 	var songs: Array[Dictionary] = []
 	for file: String in DirAccess.get_files_at("res://data/songs"):
 		if file.ends_with(".json"):
@@ -19,7 +28,14 @@ static func all() -> Array[Dictionary]:
 		for folder: String in DirAccess.get_directories_at(USER_DIR):
 			_add(songs, "%s/%s/chart.json" % [USER_DIR, folder])
 	songs.sort_custom(_before)
+	_cached = songs
+	_cached_ok = true
 	return songs
+
+
+## Forgets the library, so the next all() reads the chart files again.
+static func invalidate() -> void:
+	_cached_ok = false
 
 
 static func in_region(region: String) -> Array[Dictionary]:

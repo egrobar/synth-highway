@@ -22,8 +22,13 @@ const LENGTH := 46.0
 const KEY_WIDTH := 1.6
 const HEAD_LENGTH := 1.0
 const NOTE_HEIGHT := 0.3
+## How strongly each lane's floor carries its finger's colour. Godot blends transparency in linear
+## light, so on the dark sci-fi roads even 4.5% of a bright colour read as a heavy stripe: the notes
+## got lost in a rainbow and G and H came out maroon, close to a missed note's red (2026-11-10).
+## 2% keeps every lane readable on all five roads without competing with the notes.
+const LANE_TINT := 0.02
 const COLOR_SHARP := Color(1.0, 0.58, 0.18)
-const COLOR_MISS := Color(1.0, 0.247, 0.4)
+const COLOR_MISS := Color(0.62, 0.14, 0.18)  # dark red: never mistaken for the pink of G and H
 const COLOR_HOT := Color(0.85, 0.98, 1.0)
 const COLOR_DEAD := Color(0.26, 0.28, 0.36)
 const COLOR_WRONG := Color(1.0, 0.25, 0.4)
@@ -76,6 +81,18 @@ func setup(chart: Chart) -> void:
 		line.visible = false
 		add_child(line)
 		_beat_pool.append(line)
+	_shadowless(self)
+
+
+## The keys and notes neither cast nor receive shadows. Under the high-detail shadows the key tops
+## showed acne (diagonal stripes) and the soft shadows of power cables wandering across them: noise
+## exactly where the player reads. A note's shadow on the road would only be a darker note to misread.
+func _shadowless(root: Node) -> void:
+	for node: Node in root.find_children("*", "GeometryInstance3D", true, false):
+		var geometry := node as GeometryInstance3D
+		geometry.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if geometry.material_override is StandardMaterial3D:
+			(geometry.material_override as StandardMaterial3D).disable_receive_shadows = true
 
 
 ## Half the keyboard's width. The same for every song, so a region's road never changes width.
@@ -228,6 +245,7 @@ func _acquire(n: Chart.Note) -> void:
 		view.root.add_child(view.body)
 		view.root.add_child(view.label)
 		add_child(view.root)
+		_shadowless(view.root)
 	else:
 		view = _pool.pop_back()
 	# Sharps are narrower, so a note on the line between two lanes never reads as either one.
@@ -273,13 +291,15 @@ func _update_beat_lines(now: float, speed: float) -> void:
 
 
 func _update_keys(now: float, delta: float) -> void:
-	# The next note's key breathes as it approaches: a teaching aid for a new layout.
+	# A key lights only while its note can be hit: lit means a press now counts. It comes on at the
+	# edge of the good window and brightens to its peak dead on the note, the perfect moment. (It used
+	# to start glowing 0.7 s early, and a press when it lit was a guaranteed miss: playtest, 2026-11-10.)
 	var hint: Dictionary = {}
 	for view: NoteView in _active:
 		var n: Chart.Note = view.note
-		var until: float = n.t - now
-		if n.state == Chart.NoteState.PENDING and until < 0.7:
-			hint[n.lane] = maxf(float(hint.get(n.lane, 0.0)), 1.0 - maxf(until, 0.0) / 0.7)
+		var offset: float = absf(n.t - now)
+		if n.state == Chart.NoteState.PENDING and offset <= Judge.GOOD_WINDOW:
+			hint[n.lane] = maxf(float(hint.get(n.lane, 0.0)), 1.0 - offset / Judge.GOOD_WINDOW)
 	for lane: int in _keys:
 		var key: Dictionary = _keys[lane]
 		var glow: Color = _lane_color(lane)
@@ -294,8 +314,9 @@ func _update_keys(now: float, delta: float) -> void:
 			mat.emission = glow
 			mat.emission_energy_multiplier = 2.0
 		elif hint.has(lane):
+			# Clearly on from the first hittable moment, brightest at the centre.
 			mat.emission = glow
-			mat.emission_energy_multiplier = 0.2 + 1.0 * float(hint[lane])
+			mat.emission_energy_multiplier = 0.5 + 1.3 * float(hint[lane])
 		else:
 			mat.emission_energy_multiplier = 0.0
 		var sink: float = 0.1 if down else 0.0
@@ -325,6 +346,7 @@ func _emissive(color: Color, energy: float, alpha: float = 1.0) -> StandardMater
 	mat.emission = color
 	mat.emission_energy_multiplier = energy
 	mat.roughness = 0.35
+	mat.disable_receive_shadows = true  # see _shadowless()
 	if alpha < 1.0:
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	return mat
@@ -435,7 +457,12 @@ func _build_lane_guides() -> void:
 	for lane: int in KeyMap.COUNT:
 		var tint := MeshInstance3D.new()
 		tint.mesh = _box
-		tint.material_override = _emissive(KeyMap.color_for(lane), 0.25, 0.07)
+		# Unshaded, so the headlights and each region's own light leave it alone.
+		var tint_mat := StandardMaterial3D.new()
+		tint_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		tint_mat.albedo_color = Color(KeyMap.color_for(lane), LANE_TINT)
+		tint_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		tint.material_override = tint_mat
 		tint.scale = Vector3(KEY_WIDTH * 0.94, 0.008, LENGTH + 4.0)
 		tint.position = Vector3(lane_x(lane), 0.008, -(LENGTH + 4.0) * 0.5)
 		add_child(tint)

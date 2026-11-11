@@ -5,6 +5,10 @@ extends RefCounted
 
 const USER_DIR := "user://songs"
 
+## Difficulty.rate results by chart path, kept while the file is unchanged: the route screen
+## rebuilds its song list on every key press, and rating ~90 songs each time would stall it.
+static var _rating_cache: Dictionary = {}
+
 
 static func all() -> Array[Dictionary]:
 	var songs: Array[Dictionary] = []
@@ -55,16 +59,41 @@ static func _add(songs: Array[Dictionary], path: String) -> void:
 		"id": meta["id"], "title": meta.get("title", meta["id"]), "theme": meta.get("theme", "backroads"),
 		"source": meta.get("source", "builtin"), "bpm": meta.get("bpm", 120.0), "duration": meta.get("duration", 0.0),
 		"path": path, "notes": (meta.get("notes", []) as Array).size(),
+		# The space game radio station a song came from, if any (tools/importer/import_radio.sh).
+		"station": meta.get("station", ""),
+		# Per difficulty: Difficulty.rate's {"level", "score", "reasons", "peak_nps"}.
+		"ratings": _ratings_for(path, meta),
 	}
 	songs.append(entry)
 
 
-## Built-in songs first, easiest first; then the player's own, newest last.
+static func _ratings_for(path: String, meta: Dictionary) -> Dictionary:
+	var stamp: int = FileAccess.get_modified_time(path)
+	var cached: Dictionary = _rating_cache.get(path, {})
+	if not cached.is_empty() and int(cached["stamp"]) == stamp:
+		return cached["ratings"]
+	var levels: Dictionary = meta.get("difficulties", {})
+	var ratings: Dictionary = {}
+	for level: String in Chart.DIFFICULTIES:
+		ratings[level] = Difficulty.rate(levels.get(level, meta.get("notes", [])))
+	_rating_cache[path] = {"stamp": stamp, "ratings": ratings}
+	return ratings
+
+
+## A song's level (1-10) at one difficulty, as a whole number for menus.
+static func level_of(song: Dictionary, difficulty: String) -> int:
+	return Difficulty.level_of((song.get("ratings", {}) as Dictionary).get(difficulty, {}))
+
+
+## Built-in songs first, easiest first (by their Normal chart's difficulty), so a region's list
+## reads as a climb; then the player's own, newest last.
 static func _before(a: Dictionary, b: Dictionary) -> bool:
 	if a["source"] != b["source"]:
 		return a["source"] == "builtin"
-	var rate_a: float = float(a["notes"]) / maxf(float(a["duration"]), 1.0)
-	var rate_b: float = float(b["notes"]) / maxf(float(b["duration"]), 1.0)
 	if a["source"] == "builtin":
-		return rate_a < rate_b
+		var level_a: float = float((a["ratings"] as Dictionary)["normal"]["level"])
+		var level_b: float = float((b["ratings"] as Dictionary)["normal"]["level"])
+		if not is_equal_approx(level_a, level_b):
+			return level_a < level_b
+		return str(a["title"]) < str(b["title"])
 	return str(a["path"]) < str(b["path"])

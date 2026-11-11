@@ -105,11 +105,41 @@ class Model:
         return obj
 
 
+# Hard-surface finish, applied to every prop at export (see detail()). Bevel width in metres.
+BEVEL_WIDTH = 0.03
+BEVEL_SEGMENTS = 2
+BEVEL_ANGLE = 35.0
+
+
+def detail(obj) -> None:
+    """Bevelled edges with hardened, area-weighted normals, smooth-shaded: the hard-surface look.
+    Under the game's high-detail lighting (shadows, AO, reflections) a razor edge catches no light,
+    so a box reads as a flat cut-out; a small rounded edge gives every corner a highlight. Flat faces
+    stay flat (harden_normals), curved parts (cylinders, rocks) shade smooth instead of faceted.
+    A builder can opt out or change the width with obj["bevel"] = 0 or a width in metres; open
+    planes (no thickness) are skipped by the bevel by nature."""
+    width = float(obj.get("bevel", BEVEL_WIDTH))
+    for poly in obj.data.polygons:
+        poly.use_smooth = True
+    if width > 0.0:
+        bevel = obj.modifiers.new("bevel", "BEVEL")
+        bevel.width = width
+        bevel.segments = BEVEL_SEGMENTS
+        bevel.limit_method = "ANGLE"
+        bevel.angle_limit = math.radians(BEVEL_ANGLE)
+        bevel.use_clamp_overlap = True
+        bevel.harden_normals = True
+    weighted = obj.modifiers.new("weighted", "WEIGHTED_NORMAL")
+    weighted.keep_sharp = True
+    weighted.mode = "FACE_AREA"
+
+
 def export_all(builders, out_dir: str, preview: str | None = None) -> None:
     os.makedirs(out_dir, exist_ok=True)
     objects = []
     for build in builders:
         obj = build()
+        detail(obj)
         objects.append(obj)
         bpy.ops.object.select_all(action="DESELECT")
         obj.select_set(True)
@@ -117,7 +147,9 @@ def export_all(builders, out_dir: str, preview: str | None = None) -> None:
         path = os.path.join(out_dir, f"{obj.name}.glb")
         bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=True, export_apply=True,
                                   export_yup=True, export_cameras=False, export_lights=False)
-        tris = sum(len(p.vertices) - 2 for p in obj.data.polygons)
+        # Count what was exported: the modifiers' result, not the bare mesh.
+        evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        tris = sum(len(p.vertices) - 2 for p in evaluated.data.polygons)
         print(f"EXPORTED {obj.name}: {tris} tris, {os.path.getsize(path) // 1024} KB")
     if preview:
         _contact_sheet(objects, preview)

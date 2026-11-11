@@ -143,3 +143,13 @@ def set_out(relative: str) -> None:
     global OUT
     OUT = os.path.join(ROOT, relative)
     os.makedirs(OUT, exist_ok=True)
+
+
+def srgb(r: float, g: float, b: float) -> str:
+    """An on-screen (sRGB) colour, 0-1 per channel, as the rgb() string GEGL expects.
+    GEGL reads "rgb(...)" as LINEAR light, so typing screen colours straight in comes out pale
+    and washed out (found building Red Frontier, 2026-11-10). Use srgb(...) wherever a colour
+    was picked by eye."""
+    def lin(c: float) -> float:
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    return "rgb(%.5f,%.5f,%.5f)" % (lin(r), lin(g), lin(b))

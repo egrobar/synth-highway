@@ -32,3 +32,8 @@ tools/song/build/
 # The scripts in tools/ are the source; the WAV renders are build output (~360 MB).
 game/assets/**/*.wav
 game/assets/**/*.wav.import
+
+# Built-in songs imported from the space game radio (tools/importer/import_radio.sh): their
+# stems are rebuilt from space-mmo, so only the charts (game/data/songs) are committed.
+game/assets/songs/**/*.ogg
+game/assets/songs/**/*.ogg.import

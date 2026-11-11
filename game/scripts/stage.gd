@@ -67,6 +67,16 @@ func show_chart(id: String, chart: Chart) -> Highway:
 	return highway
 
 
+## Rebuilds the region in view, after the graphics setting changes.
+func rebuild_world() -> void:
+	if world == null:
+		return
+	var current: String = theme_id
+	var half: float = world.road_half
+	theme_id = ""
+	_ensure_world(current, half)
+
+
 func _ensure_world(id: String, half_width: float) -> void:
 	if world and theme_id == id and is_equal_approx(world.road_half, half_width):
 		return

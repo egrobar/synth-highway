@@ -24,9 +24,10 @@ enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS, SETTINGS }
 
 ## P on the route steps through these: off, then practice at each speed.
 const PRACTICE_SPEEDS: Array[float] = [0.0, 1.0, 0.85, 0.7]
-const SETTING_ROWS: Array[String] = ["music", "effects", "note_speed", "letters", "motion", "fullscreen", "timing"]
+const SETTING_ROWS: Array[String] = ["music", "effects", "note_speed", "letters", "motion", "graphics", "fullscreen", "timing"]
 const SETTING_NAMES := {"music": "Music volume", "effects": "Sound effects volume", "note_speed": "Note speed",
-	"letters": "Letters on notes", "motion": "Beat flashes and camera movement", "fullscreen": "Fullscreen",
+	"letters": "Letters on notes", "motion": "Beat flashes and camera movement",
+	"graphics": "High-detail graphics", "fullscreen": "Fullscreen",
 	"timing": "Timing check"}
 
 const CALIBRATE_CLICKS := 12
@@ -78,6 +79,8 @@ var _calib_taps: Array[int] = []
 var _calib_status: Label
 var _calib_done: bool = false
 var _toast: Label
+## The Escape menu on the title and route screens, while it is open.
+var _menu: MenuOverlay
 
 
 func _ready() -> void:
@@ -200,6 +203,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not event is InputEventKey or event.echo or not event.pressed:
 		return
 	var code: Key = (event as InputEventKey).physical_keycode
+	if _menu:
+		_menu.handle_key(code)
+		return
 	match _screen:
 		Screen.TITLE:
 			if code == KEY_SPACE or code == KEY_ENTER:
@@ -208,6 +214,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif code == KEY_S:
 				_click()
 				_open_settings(_show_title)
+			elif code == KEY_ESCAPE:
+				_open_menu()
 		Screen.ROUTE:
 			_route_key(code)
 		Screen.SETTINGS:
@@ -242,6 +250,7 @@ func _click() -> void:
 func _clear_ui() -> void:
 	for child: Node in _ui.get_children():
 		child.queue_free()
+	_menu = null
 	_toast = null
 
 
@@ -303,7 +312,7 @@ func _show_title() -> void:
 	Ui.anchor(line, 0.0, 0.0, 1.0, 0.0, 0, 300, 0, 348, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(line)
 	_ui.add_child(_home_row_guide(400.0))
-	_hint("SPACE  start        S  settings")
+	_hint("SPACE  start        S  settings        ESC  menu")
 
 
 ## The ten keys, as they sit under your hands: fingers rest on A S D F and J K L ;,
@@ -318,10 +327,10 @@ func _home_row_guide(top: float) -> Control:
 	for lane: int in KeyMap.COUNT:
 		var reach: bool = KeyMap.REACH.has(lane)
 		# Each key wears its finger's colour, the same one its notes arrive in.
-		var key := Ui.card(true, KeyMap.color_for(lane) if not reach else Color(KeyMap.color_for(lane), 0.45))
+		var key := Ui.card(true, KeyMap.color_for(lane))
 		var x: float = start + lane * (cap + gap)
 		Ui.anchor(key, 0.0, 0.0, 0.0, 0.0, x, 40, x + cap, 40 + cap)
-		var letter := Ui.label(KeyMap.label_for(lane), 40, Ui.TEXT if not reach else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+		var letter := Ui.label(KeyMap.label_for(lane), 40, Ui.TEXT if not reach else KeyMap.color_for(lane), HORIZONTAL_ALIGNMENT_CENTER)
 		Ui.anchor(letter, 0.0, 0.0, 1.0, 1.0, 0, 12, 0, -10, HORIZONTAL_ALIGNMENT_CENTER)
 		key.add_child(letter)
 		if KeyMap.HOMING.has(lane):
@@ -417,7 +426,7 @@ func _show_route(message: String = "") -> void:
 	_ui.add_child(load_row)
 	if not _songs.is_empty():
 		_ui.add_child(_song_detail(_songs[selected], accent, unlocked))
-	_hint("← →  region     ↑ ↓  song     TAB  easy / normal     P  practice     ENTER  drive     L  load your song     S  settings     ESC  title")
+	_hint("← →  region      ↑ ↓  song      TAB  difficulty      P  practice      ENTER  drive      ESC  menu")
 	if not message.is_empty():
 		_show_toast(message)
 
@@ -456,18 +465,23 @@ func _song_row(index: int, selected: bool, y: float, accent: Color, unlocked: bo
 	if not unlocked:
 		row.modulate.a = 0.55
 	var title := Ui.label(str(song["title"]), 28, Ui.TEXT)
-	Ui.anchor(title, 0.0, 0.0, 0.72, 1.0, 22, 6, 0, -6)
+	Ui.anchor(title, 0.0, 0.0, 0.6, 1.0, 22, 6, 0, -6)
 	title.clip_text = true
 	row.add_child(title)
+	# The song's level at the difficulty being browsed (Difficulty), coloured green to red.
+	var song_level: int = SongLibrary.level_of(song, _difficulty)
+	var badge := Ui.label("Lv %d" % song_level, 24, Difficulty.colour_of(song_level), HORIZONTAL_ALIGNMENT_RIGHT)
+	Ui.anchor(badge, 0.6, 0.0, 0.72, 1.0, 0, 12, -4, -10, HORIZONTAL_ALIGNMENT_RIGHT)
+	row.add_child(badge)
 	if song["source"] == "imported":
-		Ui.anchor(title, 0.0, 0.0, 0.72, 1.0, 22, 0, 0, -20)
+		Ui.anchor(title, 0.0, 0.0, 0.6, 1.0, 22, 0, 0, -20)
 		var tag := Ui.label("YOUR SONG", 16, Ui.WARM)
 		Ui.anchor(tag, 0.0, 1.0, 0.0, 1.0, 24, -24, 200, -2)
 		row.add_child(tag)
 	var bests: Array[String] = []
 	for level: String in Chart.DIFFICULTIES:
-		bests.append(str(_save.best_for(song["id"], level).get("grade", "·")))
-	var grades := Ui.label("  ".join(bests), 26, Ui.WARM, HORIZONTAL_ALIGNMENT_RIGHT)
+		bests.append("%s %s" % [level.left(1).to_upper(), str(_save.best_for(song["id"], level).get("grade", "–"))])
+	var grades := Ui.label("    ".join(bests), 24, Ui.WARM, HORIZONTAL_ALIGNMENT_RIGHT)
 	Ui.anchor(grades, 0.72, 0.0, 1.0, 1.0, 0, 12, -20, -10, HORIZONTAL_ALIGNMENT_RIGHT)
 	row.add_child(grades)
 	if selected and _remove_armed_until > Time.get_ticks_msec():
@@ -485,17 +499,20 @@ func _song_row(index: int, selected: bool, y: float, accent: Color, unlocked: bo
 
 func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 	var card := Ui.card(true, accent)
-	Ui.anchor(card, 0.5, 0.0, 0.5, 0.0, -50, LIST_TOP, 720, LIST_TOP + 470)
+	Ui.anchor(card, 0.5, 0.0, 0.5, 0.0, -50, LIST_TOP, 720, LIST_TOP + 466)
+	# One line: a two-line title box left a hole under every short title.
 	var title := Ui.label(str(song["title"]), 38, Ui.TEXT)
-	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	Ui.anchor(title, 0.0, 0.0, 1.0, 0.0, 28, 18, -28, 104)
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	Ui.anchor(title, 0.0, 0.0, 1.0, 0.0, 28, 16, -28, 64)
 	card.add_child(title)
 	var length: int = int(round(float(song["duration"])))
 	var facts: String = "%d BPM   ·   %d:%02d" % [int(round(float(song["bpm"]))), length / 60, length % 60]
+	if not str(song.get("station", "")).is_empty():
+		facts += "   ·   on %s" % song["station"]
 	if song["source"] == "imported":
 		facts += "   ·   your song"
 	var info := Ui.label(facts, 24, Ui.MUTED)
-	Ui.anchor(info, 0.0, 0.0, 1.0, 0.0, 28, 108, -28, 140)
+	Ui.anchor(info, 0.0, 0.0, 1.0, 0.0, 28, 66, -28, 96)
 	card.add_child(info)
 
 	# Easy and Normal side by side; TAB or a click switches.
@@ -506,7 +523,7 @@ func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 		var on: bool = level == _difficulty
 		var chip := Ui.card(on, accent)
 		var x: float = 28.0 + i * 352.0
-		Ui.anchor(chip, 0.0, 0.0, 0.0, 0.0, x, 158, x + 336, 300)
+		Ui.anchor(chip, 0.0, 0.0, 0.0, 0.0, x, 112, x + 336, 286)
 		var notes: Array = levels.get(level, [])
 		var holds: int = 0
 		var reach: bool = false
@@ -521,6 +538,11 @@ func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 		var head := Ui.label(level.to_upper(), 28, accent if on else Ui.MUTED)
 		Ui.anchor(head, 0.0, 0.0, 1.0, 0.0, 18, 10, -18, 46)
 		chip.add_child(head)
+		var rating: Dictionary = (song.get("ratings", {}) as Dictionary).get(level, {})
+		var chart_level: int = Difficulty.level_of(rating)
+		var level_label := Ui.label("LEVEL %d" % chart_level, 26, Difficulty.colour_of(chart_level), HORIZONTAL_ALIGNMENT_RIGHT)
+		Ui.anchor(level_label, 0.0, 0.0, 1.0, 0.0, 18, 12, -18, 46, HORIZONTAL_ALIGNMENT_RIGHT)
+		chip.add_child(level_label)
 		var best: Dictionary = _save.best_for(song["id"], level)
 		var best_text: String = "Best  %s   %d" % [best["grade"], int(best["score"])] if not best.is_empty() else "Not driven yet"
 		var best_label := Ui.label(best_text, 24, Ui.WARM if not best.is_empty() else Ui.MUTED)
@@ -537,6 +559,16 @@ func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 		var keys := Ui.label(keys_text, 20, Color(1.0, 0.62, 0.25) if sharps > 0 else Ui.MUTED)
 		Ui.anchor(keys, 0.0, 0.0, 1.0, 0.0, 18, 108, -18, 134)
 		chip.add_child(keys)
+		# What makes it hard, in a few words (Difficulty._reasons).
+		var reasons: Array = rating.get("reasons", [])
+		var why_text: String = "Steady and even"
+		if not reasons.is_empty():
+			why_text = ", ".join(reasons)
+			why_text = why_text.left(1).to_upper() + why_text.substr(1)
+		var why := Ui.label(why_text, 20, Difficulty.colour_of(chart_level))
+		why.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		Ui.anchor(why, 0.0, 0.0, 1.0, 0.0, 18, 138, -18, 164)
+		chip.add_child(why)
 		_on_click(chip, func() -> void:
 			if _difficulty != level:
 				_difficulty = level
@@ -546,15 +578,21 @@ func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 
 	# Practice, stepped through with P: off, then no-fail runs at full, 85% and 70% speed.
 	var practising: bool = _practice_step > 0
-	var practice_text: String = "P   Practice run: off"
+	var practice_text: String = "Practice: off"
 	if practising:
-		practice_text = "P   Practice run: %d%% speed, no fail, not scored" % int(round(PRACTICE_SPEEDS[_practice_step] * 100.0))
-	var practice := Ui.label(practice_text, 22, Ui.WARM if practising else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(practice, 0.0, 0.0, 1.0, 0.0, 28, 308, -28, 340, HORIZONTAL_ALIGNMENT_CENTER)
+		practice_text = "Practice: %d%% speed  ·  no fail  ·  not scored" % int(round(PRACTICE_SPEEDS[_practice_step] * 100.0))
+	var practice := Ui.card(practising, Ui.WARM)
+	Ui.anchor(practice, 0.0, 0.0, 1.0, 0.0, 28, 298, -28, 338)
+	var practice_label := Ui.label(practice_text, 22, Ui.WARM if practising else Ui.MUTED)
+	Ui.anchor(practice_label, 0.0, 0.0, 1.0, 1.0, 16, 7, -60, -5)
+	practice.add_child(practice_label)
+	var practice_key := Ui.label("P", 22, Ui.MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
+	Ui.anchor(practice_key, 0.0, 0.0, 1.0, 1.0, 0, 7, -16, -5, HORIZONTAL_ALIGNMENT_RIGHT)
+	practice.add_child(practice_key)
 	_on_click(practice, _step_practice)
 	card.add_child(practice)
 	var drive := Ui.card(unlocked, accent)
-	Ui.anchor(drive, 0.0, 0.0, 1.0, 0.0, 28, 346, -28, 424)
+	Ui.anchor(drive, 0.0, 0.0, 1.0, 0.0, 28, 350, -28, 424)
 	var drive_text: String = ("ENTER   PRACTISE" if practising else "ENTER   DRIVE") if unlocked else "LOCKED"
 	var drive_label := Ui.label(drive_text, 38, accent if unlocked else Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(drive_label, 0.0, 0.0, 1.0, 1.0, 0, 14, 0, -12, HORIZONTAL_ALIGNMENT_CENTER)
@@ -563,7 +601,7 @@ func _song_detail(song: Dictionary, accent: Color, unlocked: bool) -> Control:
 	card.add_child(drive)
 	if song["source"] == "imported":
 		var remove := Ui.label("X  remove this song", 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-		Ui.anchor(remove, 0.0, 0.0, 1.0, 0.0, 0, 432, 0, 460, HORIZONTAL_ALIGNMENT_CENTER)
+		Ui.anchor(remove, 0.0, 0.0, 1.0, 0.0, 0, 430, 0, 456, HORIZONTAL_ALIGNMENT_CENTER)
 		card.add_child(remove)
 	return card
 
@@ -608,8 +646,34 @@ func _route_key(code: Key) -> void:
 		KEY_X:
 			_try_remove()
 		KEY_ESCAPE:
-			_click()
-			_show_title()
+			_open_menu()
+
+
+## Escape on the title or route: carry on, settings, back to the title, or quit the game.
+func _open_menu() -> void:
+	if _menu:
+		return
+	_click()
+	var back: Callable = _show_title if _screen == Screen.TITLE else _show_route
+	var items: Array[Dictionary] = [
+		{"text": "Resume", "key_text": "ESC", "action": _close_menu},
+		{"text": "Settings", "key": KEY_S, "key_text": "S", "action": func() -> void:
+			_close_menu()
+			_open_settings(back)},
+	]
+	if _screen == Screen.ROUTE:
+		items.append({"text": "Title screen", "key": KEY_T, "key_text": "T", "action": func() -> void:
+			_close_menu()
+			_show_title()})
+	items.append({"text": "Quit game", "key": KEY_Q, "key_text": "Q", "action": func() -> void: get_tree().quit()})
+	_menu = MenuOverlay.new().setup("MENU", items, _close_menu, _accent(_regions[_region_index]), "", _click)
+	_ui.add_child(_menu)
+
+
+func _close_menu() -> void:
+	if _menu:
+		_menu.queue_free()
+		_menu = null
 
 
 func _step_practice() -> void:
@@ -884,6 +948,17 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> v
 	_clear_ui()
 	_screen = Screen.RESULTS
 	_ui.add_child(Ui.dim_panel())
+	# The run's numbers sit on a solid card, so the keyboard and lanes behind never read through them.
+	var sheet := Panel.new()
+	var sheet_box := StyleBoxFlat.new()
+	sheet_box.bg_color = Color(0.02, 0.03, 0.07, 0.94)
+	sheet_box.set_corner_radius_all(20)
+	sheet_box.set_border_width_all(1)
+	sheet_box.border_color = Color(_accent(_regions[_region_index]), 0.45)
+	sheet.add_theme_stylebox_override("panel", sheet_box)
+	Ui.anchor(sheet, 0.5, 0.0, 0.5, 0.0, -600, 70, 600, 650)
+	sheet.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(sheet)
 	var failed: bool = result["failed"]
 	var heading := Ui.label("OUT OF GAS" if failed else str(result["title"]), 62, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 96, 0, 176, HORIZONTAL_ALIGNMENT_CENTER)
@@ -1035,6 +1110,8 @@ func _change_setting(step: int) -> void:
 			_save.settings[key] = not bool(current)
 	Settings.apply(_save.settings)
 	_save.write()
+	if key == "graphics":
+		_stage.rebuild_world()
 	# After applying, so the click is heard at the new effects volume.
 	_click()
 	_show_settings()

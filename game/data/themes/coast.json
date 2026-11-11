@@ -1,9 +1,9 @@
 {
  "id": "coast",
- "name": "Coast Road",
- "genres": "Pop, R&B, soul",
+ "name": "Tidewater",
+ "genres": "Pop, sea shanties",
  "order": 3,
  "lead": "flute",
  "accent": "#ff8f78",
- "blurb": "A cliffside highway above a moonlit sea, the lighthouse turning in the dark."
+ "blurb": "An ice-bound shore on an ocean moon, a banded giant rising from the sea."
 }

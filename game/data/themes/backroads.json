@@ -1,9 +1,9 @@
 {
  "id": "backroads",
- "name": "Backroads",
- "genres": "Country, folk, Americana",
+ "name": "Red Frontier",
+ "genres": "Country, folk, driving",
  "order": 1,
  "lead": "steel",
- "accent": "#ffc070",
- "blurb": "Two-lane blacktop through the wheat, under a big moon."
+ "accent": "#ffa552",
+ "blurb": "Mars homesteads at dusk: glowing domes, red dust, a blue sunset."
 }

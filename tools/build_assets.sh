@@ -59,6 +59,7 @@ fi
 echo "== Godot import and tests"
 chmod +x tools/godot.sh
 # An asset read mid-write is cached as invalid and never retried; drop those so they reimport.
-grep -l -r --include='*.import' '^valid=false' game/assets 2>/dev/null | xargs rm -f
+# `|| true`: under pipefail a grep that finds nothing would otherwise end the whole build here.
+grep -l -r --include='*.import' '^valid=false' game/assets 2>/dev/null | xargs rm -f || true
 tools/godot.sh --headless --import >/dev/null 2>&1 || true
 tools/godot.sh --headless -s res://tests/test_judge.gd 2>&1 | tail -1

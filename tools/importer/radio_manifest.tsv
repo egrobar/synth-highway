@@ -1,0 +1,15 @@
+# Which space-mmo radio stations become which Synth Highway regions (tools/importer/import_radio.sh).
+# station folder (under space-mmo/assets/radio) <TAB> region id
+# Left out on purpose: Ironside (rock: dropped 2026-11-10), The Drift (lo-fi: too little beat to
+# chart well), The Kelp Lounge (live jazz, 3 tracks), Advertising (ads, not songs).
+Frontier Radio	backroads
+Fusion FM	neon
+redline	neon
+Nebula One	coast
+Void Hoppers	coast
+D43D	mesa
+Core Klassik	aurora
+Hymns of the Ark	aurora
+# Per-song overrides: "=" file name <TAB> region [<TAB> title to show]. Get Home Number is a driving song,
+# and its real title is "Just Get Me Home" (Evan, 2026-11-10).
+=Get Home Number	backroads	Just Get Me Home

@@ -12,7 +12,8 @@ extends RefCounted
 ##            correction a slowed-down practice run needs (see set_practice_speed)
 ##   Effects  clicks, hits and other sound effects
 
-const DEFAULTS := {"music": 0.8, "effects": 0.8, "note_speed": 1, "letters": true, "motion": true, "fullscreen": false}
+const DEFAULTS := {"music": 0.8, "effects": 0.8, "note_speed": 1, "letters": true, "motion": true, "fullscreen": false,
+	"graphics": true}
 ## Name, and the seconds a note is in view before it lands.
 const NOTE_SPEEDS: Array = [["Relaxed", 3.8], ["Normal", 3.0], ["Fast", 2.4], ["Faster", 1.9]]
 const BUS_MUSIC := "Music"
@@ -22,6 +23,10 @@ const BUS_EFFECTS := "Effects"
 ## Beat flashes, the combo's rush of speed and the camera's movement. Off for anyone
 ## who finds a moving, pulsing screen hard to read notes on.
 static var motion: bool = true
+## Shadows, ambient occlusion, bounce light, reflections, volumetric haze and weathered props
+## (ThemeWorld._heavy_rendering and _weather_props). Off for a machine that can't hold the frame
+## rate: a dropped frame costs timing, which matters more here than looks.
+static var high_graphics: bool = true
 
 
 static func ensure_buses() -> void:
@@ -49,6 +54,7 @@ static func apply(settings: Dictionary) -> void:
 	Highway.lookahead = float(NOTE_SPEEDS[speed][1])
 	Highway.show_letters = bool(value(settings, "letters"))
 	motion = bool(value(settings, "motion"))
+	high_graphics = bool(value(settings, "graphics"))
 	# Headless runs and embedded windows have no window mode to change.
 	if DisplayServer.get_name() != "headless":
 		var want: int = DisplayServer.WINDOW_MODE_FULLSCREEN if bool(value(settings, "fullscreen")) else DisplayServer.WINDOW_MODE_WINDOWED

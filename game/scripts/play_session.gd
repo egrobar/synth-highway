@@ -67,7 +67,7 @@ var _judgement_tween: Tween
 var _fuel_bar: ColorRect
 var _progress_bar: ColorRect
 var _center_label: Label
-var _pause_panel: Control
+var _pause_menu: MenuOverlay
 var _hands_cue: Label
 var _milestone_label: Label
 var _stage: Stage
@@ -184,17 +184,10 @@ func _handle_control_key(code: Key) -> bool:
 		return false
 	if _counting_in:
 		return code == KEY_ESCAPE or code == KEY_SPACE
+	if _paused and _pause_menu:
+		return _pause_menu.handle_key(code)
 	if code == KEY_ESCAPE or code == KEY_SPACE:
-		if _paused:
-			_start_count_in()
-		else:
-			_pause()
-		return true
-	if _paused and code == KEY_R:
-		restart_requested.emit()
-		return true
-	if _paused and code == KEY_BACKSPACE:
-		quit_to_menu.emit()
+		_pause()
 		return true
 	return false
 
@@ -300,11 +293,26 @@ func _update_lead_gate(now: float, delta: float) -> void:
 func _pause() -> void:
 	_paused = true
 	clock.pause()
-	_pause_panel.visible = true
+	# The lead-in cue would sit right under the menu's own reminder: one is enough.
+	if _hands_cue:
+		_hands_cue.visible = false
+	var items: Array[Dictionary] = [
+		{"text": "Resume", "key": KEY_SPACE, "key_text": "SPACE", "action": _start_count_in},
+		{"text": "Restart", "key": KEY_R, "key_text": "R", "action": func() -> void: restart_requested.emit()},
+		{"text": "Back to the route", "key": KEY_BACKSPACE, "key_text": "BACKSPACE", "action": func() -> void: quit_to_menu.emit()},
+		{"text": "Quit game", "key": KEY_Q, "key_text": "Q", "action": func() -> void: get_tree().quit()},
+	]
+	_pause_menu = MenuOverlay.new().setup("PAUSED", items, _start_count_in, Ui.ACCENT, HANDS_TEXT,
+		func() -> void: _play(_sfx, "ui"))
+	_hud.add_child(_pause_menu)
 
 
 func _start_count_in() -> void:
-	_pause_panel.visible = false
+	if _pause_menu:
+		_pause_menu.queue_free()
+		_pause_menu = null
+	if _hands_cue:
+		_hands_cue.visible = true
 	_paused = false
 	_counting_in = true
 	_count_number = COUNT_IN_BEATS
@@ -445,10 +453,20 @@ func _record_timing() -> void:
 			snappedf(AudioServer.get_output_latency(), 0.0001), AudioServer.get_mix_rate()])
 
 
+## Built-in songs are imported resources; the player's own are plain files in user://,
+## Ogg Vorbis since 2026-11-10 and WAV before that, so both load.
+static func _load_stem(path: String) -> AudioStream:
+	if path.begins_with("res://"):
+		return load(path)
+	if path.get_extension().to_lower() == "ogg":
+		return AudioStreamOggVorbis.load_from_file(path)
+	return AudioStreamWAV.load_from_file(path)
+
+
 func _make_player(path: String, volume_db: float) -> AudioStreamPlayer:
 	var player := AudioStreamPlayer.new()
 	# Built-in songs are imported resources; imported songs are plain WAV files in user://.
-	player.stream = load(path) if path.begins_with("res://") else AudioStreamWAV.load_from_file(path)
+	player.stream = _load_stem(path)
 	player.volume_db = volume_db
 	player.bus = Settings.BUS_STEMS
 	add_child(player)
@@ -585,19 +603,6 @@ func _build_hud() -> void:
 	_progress_bar.anchor_bottom = 1.0
 	_progress_bar.anchor_right = 0.0
 	progress_track.add_child(_progress_bar)
-
-	_pause_panel = Ui.dim_panel()
-	_pause_panel.visible = false
-	_hud.add_child(_pause_panel)
-	var paused := Ui.label("PAUSED", 74, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(paused, 0.0, 0.34, 1.0, 0.34, 0, 0, 0, 100, HORIZONTAL_ALIGNMENT_CENTER)
-	_pause_panel.add_child(paused)
-	var help := Ui.label("SPACE  resume     R  restart     BACKSPACE  route", 26, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(help, 0.0, 0.48, 1.0, 0.48, 0, 0, 0, 50, HORIZONTAL_ALIGNMENT_CENTER)
-	_pause_panel.add_child(help)
-	var hands := Ui.label(HANDS_TEXT, 26, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(hands, 0.0, 0.56, 1.0, 0.56, 0, 0, 0, 50, HORIZONTAL_ALIGNMENT_CENTER)
-	_pause_panel.add_child(hands)
 
 	# Shown through the lead-in, so every song starts from the same hand position.
 	_hands_cue = Ui.label(HANDS_TEXT, 30, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)

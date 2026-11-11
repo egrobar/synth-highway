@@ -1,27 +1,48 @@
-// Aurora Pass ambience: wind through the pines in slow gusts, a timber creak now and then, faint
-// distant wind chimes (very sparse), and the snow 4x4's low diesel idle.
-// render_fx.scd renders 22 s and make_loop.py crossfades the last 3 s over the start, so the rare
-// sounds are timed (Impulse with a phase) to fall inside the 19 s loop: creaks at 4 s and 13.5 s,
-// one breezy spell of chimes at 8 s.
+// Ring Road ambience (region id `aurora`): inside a glass skyway on an orbital ring. The station's
+// calm hum, soft air handling breathing through the vents, one slow choral pad swell a loop (an open
+// D chord sung on "aah", far off in a big reverb), two sparse phrases of distant chimes, and the
+// transit pod's quiet maglev glide (a soft high tone and a hush of air under it).
+// render_fx.scd renders 22 s and make_loop.py crossfades the last 3 s over the first, so the loop
+// is 19 s long. The steady tones complete whole cycles in 19 s (hum 57 Hz and 57 + 1/19 for its slow
+// beat, 114, 171; the glide 380, 760, 1140; the air's breathing 2/19 Hz and the glide's sway 3/19 Hz),
+// so the crossfade never cancels them. Every event is triggered between 3 s and 16 s (TDelay from the
+// start) and has died away by 19 s: the pad swells from 4 s to 16 s, the chimes fall at 5.5 s and
+// 12.6 s. sclang has no operator precedence, hence the brackets around every product.
 ~ambience = SynthDef(\ambience, {
-	var gust = LFNoise2.kr(0.09).range(0.3, 1.0);
-	var needles = HPF.ar(BPF.ar(PinkNoise.ar(1 ! 2), LFNoise2.kr([0.13, 0.11]).range(700, 2200), 0.8), 300) * 0.07 * gust;
-	var body = LPF.ar(BrownNoise.ar(0.2 ! 2), LFNoise2.kr(0.07).range(160, 380)) * (0.45 + (gust * 0.55));
-	var whistle = BPF.ar(WhiteNoise.ar(1 ! 2), LFNoise2.kr([0.05, 0.06]).range(620, 900), 0.02) * 0.05 * gust.squared;
-	// A timber's stick-slip: a run of clicks through a wooden body.
-	var creakEnv = EnvGen.kr(Env([0, 1, 0.6, 0], [0.35, 0.7, 0.45], \sin), Impulse.kr(1 / 9.5, 0.58));
-	var clicks = Impulse.ar(LFNoise2.kr(5).range(14, 46)) * creakEnv;
-	var creak = Mix(Ringz.ar(clicks, [310, 520, 870, 1340], [0.06, 0.04, 0.025, 0.015], [1, 0.6, 0.35, 0.2])) * 0.04;
-	// Five chime tubes (G6 A6 C7 D7 E7), each struck at random during one short breezy spell, far off.
-	var spell = EnvGen.kr(Env([0, 1, 1, 0], [0.6, 1.8, 0.8], \sin), Impulse.kr(1 / 19, 0.58));
-	var chimes = Mix.fill(5, { |i|
-		var freq = [1568, 1760, 2093, 2349, 2637][i];
-		var hit = K2A.ar(CoinGate.kr(0.3, Impulse.kr(5.3 + (i * 0.9))) * (spell > 0.2));
-		Pan2.ar(Ringz.ar(hit, freq, 2.4) + (Ringz.ar(hit, freq * 2.76, 0.7) * 0.3), (i - 2) * 0.25);
+	var at = { |time| TDelay.kr(Impulse.kr(0), time) };
+
+	var humLevel = LFNoise2.kr(0.08).range(0.85, 1.0);
+	var hum = (SinOsc.ar([57, 57 + (1 / 19)], 0, 0.016) + SinOsc.ar(114, 0, 0.006 ! 2)
+		+ SinOsc.ar(171, 0, 0.0022 ! 2)) * humLevel;
+	var humAir = LPF.ar(BrownNoise.ar(0.2 ! 2), 120) * 0.12;
+
+	var breath = SinOsc.kr(2 / 19, 0).range(0.65, 1.0);
+	var air = LPF.ar(HPF.ar(PinkNoise.ar(1 ! 2), 180), LFNoise2.kr([0.09, 0.11]).range(900, 1500)) * (0.05 * breath);
+	var vent = BPF.ar(WhiteNoise.ar(1 ! 2), 2400, 0.4) * (0.006 * breath);
+
+	var swell = EnvGen.kr(Env([0, 0, 1, 1, 0], [4.0, 4.5, 2.5, 5.0], [0, 2, 0, -2]));
+	var notes = [50, 57, 62, 66, 69].midicps;
+	var voices = Mix.fill(5, { |i|
+		var f = notes[i] * (1 + SinOsc.kr(4.7 + (i * 0.37), i, 0.0035));
+		Saw.ar(f * [1, 1.004, 0.996]).sum * 0.3
 	});
-	var distant = FreeVerb2.ar(chimes[0], chimes[1], 0.6, 0.92, 0.35) * 0.006;
-	// The 4x4 idling: a low, lumpy diesel.
-	var lump = 1 + LFNoise1.kr(7, 0.12);
-	var engine = LPF.ar(Saw.ar(36 + LFNoise1.kr(1.7, 0.3)) + Pulse.ar(36.3, 0.32, 0.6), 130) * 0.05 * lump ! 2;
-	Out.ar(0, needles + body + whistle + Pan2.ar(creak, -0.35) + LPF.ar(distant, 6500) + engine);
+	var choir = Mix(BPF.ar(LPF.ar(voices, 3200), [700, 1220, 2600], [0.12, 0.1, 0.08], [1, 0.5, 0.22])) * (swell * 0.22);
+	var choirWide = FreeVerb2.ar(choir, DelayN.ar(choir, 0.03, 0.017), 0.75, 0.96, 0.45);
+
+	var chimeTimes = [5.5, 6.15, 6.9, 12.6, 13.35];
+	var chimeFreqs = [1318.51, 1760.0, 1975.53, 1567.98, 2093.0];
+	var chimePans = [-0.5, 0.3, -0.2, 0.5, -0.35];
+	var chimes = Mix.fill(5, { |i|
+		var hit = K2A.ar(at.(chimeTimes[i]));
+		var tone = Ringz.ar(hit, chimeFreqs[i], 2.6) + (Ringz.ar(hit, chimeFreqs[i] * 2.76, 0.7) * 0.25);
+		Pan2.ar(tone, chimePans[i])
+	});
+	var distant = FreeVerb2.ar(LPF.ar(chimes[0], 5500), LPF.ar(chimes[1], 5500), 0.65, 0.93, 0.4) * 0.04;
+
+	var sway = SinOsc.kr(3 / 19, 0).range(0.8, 1.0);
+	var glide = ((SinOsc.ar(380, 0, 0.004) + SinOsc.ar(760, 0, 0.0016) + SinOsc.ar(1140, 0, 0.0007)) * sway) ! 2;
+	var hush = LPF.ar(BrownNoise.ar(1 ! 2), 280) * 0.05;
+
+	// Scaled to sit near the other regions' loudness (about -22 dBFS RMS); the pad and chimes stay soft events.
+	Out.ar(0, (hum + humAir + air + vent + choirWide + distant + glide + hush) * 2.2);
 });

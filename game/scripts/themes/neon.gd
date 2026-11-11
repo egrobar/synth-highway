@@ -8,9 +8,16 @@ extends ThemeWorld
 ## road's roughness texture) and screen-space reflections are on, so the neon smears
 ## across the wet asphalt. Nothing stands on the road: decks, barriers and lamps start
 ## at its edge, and the gantry's signs hang above the camera so they only cross the sky.
+##
+## High detail (2026-11-10): the props are engineered up close (curtain walls with mullions and
+## roof plant, fire escapes, bolted barrier joints, finned lamp heads, a box-truss gantry with a
+## catwalk) and their material names pick the shared surface maps: concrete for the deck and
+## barriers, brushed metal for steel, riveted plating for tower cladding, grating for catwalks.
+## Weathering is city soot run down in rain streaks; the tower glass stays clean and mapless so
+## its reflections read.
 
 const LAMP_SPACING := 20.0  # must match LAMP_SPACING in tools/themes/neon/props.py
-const BARRIER_LENGTH := 5.0  # must match BARRIER_LENGTH in tools/themes/neon/props.py
+const BARRIER_LENGTH := 10.0  # two precast segments; must match BARRIER_LENGTH in tools/themes/neon/props.py
 const DECK_LENGTH := 30.0  # must match DECK_LENGTH in tools/themes/neon/props.py
 const GANTRY_ROAD_HALF := 8.4  # the gantry model is built for this road half-width; it is stretched to fit
 const STREET_LEVEL := -26.0  # the city floor, far below the freeway deck
@@ -22,10 +29,25 @@ var _clock: float = 0.0
 
 
 func build() -> void:
+	# City soot, run down vertical faces in rain streaks; nothing settles in the rain, so the "dust"
+	# is a thin wet film of soot on the tops. The surface maps (concrete tie holes and pour lines,
+	# steel brushing, cladding plates) carry the detail at a moderate tone, so the props stay dark
+	# and the neon leads. Grain and relief are kept low: this region's metal and glass are glossy
+	# and lit by hundreds of neon points, and at 0.3 grain / 0.9 relief the gantry truss, the sign
+	# faces and the tower glass glittered like crumpled foil.
+	weathering = {"grime_color": Color(0.085, 0.075, 0.11), "grime": 0.6, "grime_height": 1.2,
+		"dust_color": Color(0.2, 0.18, 0.24), "dust": 0.06, "grain": 0.12, "mottle": 0.16,
+		"detail_tone": 0.55, "detail_bump": 0.6}
+	# Tower glass stays mapless (it would otherwise get brushed metal for its metalness): its
+	# mullions are modelled, and clean glass keeps the reflected neon crisp. Sign faces are smooth
+	# sheeting, so they get no map either.
+	surfaces = {"glass": "", "sign_face": ""}
 	_glitch.seed = 2077
 	var world := make_environment({
 		"sky": asset("textures/sky.png"),
 		"ambient": Color(0.42, 0.3, 0.7), "ambient_energy": 0.32,
+		# Rain haze: the headlights and the signs bloom through it.
+		"haze": 0.004, "haze_color": Color(0.3, 0.1, 0.34), "haze_glow": 0.06,
 		"fog": Color(0.2, 0.06, 0.24), "fog_density": 0.012,
 		"glow": 0.9, "glow_threshold": 1.0,
 		"light_color": Color(0.62, 0.5, 1.0), "light_energy": 0.3,
@@ -45,11 +67,10 @@ func build() -> void:
 
 	var ground := make_ground(asset("textures/ground.png"), Color(0.8, 0.75, 0.9))
 	ground.position.y = STREET_LEVEL
-	var road := make_road(asset("textures/asphalt.png"), Color(0.72, 0.72, 0.84), Color(1.0, 0.18, 0.72), 2.2)
-	var wet := road.material_override as StandardMaterial3D
-	wet.roughness = 1.0
-	wet.roughness_texture = load(asset("textures/asphalt_rough.png"))
-	wet.metallic_specular = 0.75
+	# Rain-wet asphalt: glossy, with standing water that mirrors the city.
+	make_road(asset("textures/asphalt.png"), Color(0.72, 0.72, 0.84), Color(1.0, 0.18, 0.72), 2.2,
+		{"roughness": 1.0, "roughness_texture": asset("textures/asphalt_rough.png"), "specular": 0.75,
+		"wetness": 0.4, "puddle_tint": Color(0.7, 0.66, 0.8)})
 	make_vehicle(asset("models/hood.glb"), Color(0.86, 0.92, 1.0), 24.0)
 	# Underglow: magenta spilling from under the car's nose onto the shoulders, beside the keys.
 	for side: float in [-1.0, 1.0]:
@@ -64,7 +85,7 @@ func build() -> void:
 		# Left-side pieces are turned round so their road face (-X in Blender) faces the road.
 		var yaw: float = 0.0 if side > 0.0 else 180.0
 		row(asset("models/deck.glb"), side * road_half, DECK_LENGTH, 13, yaw)
-		row(asset("models/barrier.glb"), side * (road_half + 1.4), BARRIER_LENGTH, 64, yaw)
+		row(asset("models/barrier.glb"), side * (road_half + 1.4), BARRIER_LENGTH, 32, yaw)
 		var lamps := row(asset("models/lamp.glb"), side * (road_half + 2.6), LAMP_SPACING, 16, yaw)
 		for lamp: Node in lamps.get_children():
 			var pool := OmniLight3D.new()

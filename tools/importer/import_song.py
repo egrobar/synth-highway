@@ -4,13 +4,15 @@
 
 Audio (MP3, WAV, FLAC, OGG, AIFF):
   1. Demucs splits the mix into vocals / drums / bass / other.
-  2. The lead is the vocal stem; if there is barely any voice, the "other" stem.
+  2. The lead is the vocal stem; if the voice is too quiet to be the song's line (VOICE_LEAD_RATIO),
+     the "other" stem. Every gap longer than FILL_GAP is then filled from the other melodic lines.
   3. Basic Pitch transcribes the lead, reduced to one note at a time with octave
      slips fixed, then checked against a pitch tracker (pyin) for a sung lead.
   4. librosa finds the tempo, first downbeat and key. Onsets close to the beat
      grid are snapped to it, and the key is moved to C major / A minor so the
      lanes sit on the Q row's white keys (lanes only: the audio is untouched).
-  5. Writes backing.wav (everything but the lead), lead.wav and chart.json.
+  5. Writes backing.ogg (everything but the lead), lead.ogg and chart.json. Stems are
+     Ogg Vorbis: about a tenth of the size of WAV, which matters once there are dozens.
 MIDI (.mid, .midi):
   The melody track (named vocal / melody / lead, else the busiest high track) is
   the lead; every track is rendered offline by SuperCollider with the region's
@@ -18,6 +20,10 @@ MIDI (.mid, .midi):
 
 Progress goes to stdout, one line each, for the game to show:
   PROGRESS <0..1> <message>  /  DONE <chart path>  /  ERROR <message>
+
+--builtin <id> makes the song part of the game instead of the player's library: stems go
+to game/assets/songs/<id>/, the chart to game/data/songs/<id>.json, by res:// path.
+--station names the radio station it came from, shown in the route.
 """
 from __future__ import annotations
 
@@ -37,9 +43,27 @@ sys.path.insert(0, str(ROOT / "tools/song"))
 sys.path.insert(0, str(ROOT / "pipeline"))
 import songlib  # noqa: E402
 
+# Set by main(): where the finished song goes. See the docstring for --builtin and --station.
+CONFIG: dict = {"builtin": None, "station": None}
+
 LEADS = {"backroads": "steel", "neon": "sawlead", "coast": "flute", "mesa": "drive", "aurora": "piano"}
 KEY_PROFILE_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 KEY_PROFILE_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+
+
+def write_stem(path: pathlib.Path, audio, sr: int) -> None:
+    """Ogg Vorbis at compression 0.3 (about quality 7): transparent for this, ~10x smaller than WAV.
+    audio is (channels, frames), as the separator returns it."""
+    import numpy as np
+    import soundfile as sf
+
+    data = np.ascontiguousarray(np.clip(audio.T if audio.ndim == 2 else audio, -1.0, 1.0), dtype=np.float32)
+    channels = 1 if data.ndim == 1 else data.shape[1]
+    # Written in small blocks: libsndfile's Vorbis encoder crashed (SIGSEGV) when handed a
+    # whole song in one call (2026-11-10, "Just Get Me Home").
+    with sf.SoundFile(str(path), "w", sr, channels, format="OGG", subtype="VORBIS", compression_level=0.3) as f:
+        for start in range(0, len(data), 16384):
+            f.write(data[start:start + 16384])
 
 
 def progress(fraction: float, message: str) -> None:
@@ -169,6 +193,30 @@ def merge_repeats(notes: list[dict], gap: float = 0.07) -> list[dict]:
     return out
 
 
+def beat_line(tonal_mono, sr: int, bpm: float, offset: float, duration: float) -> list[dict]:
+    """A note on every beat at the strongest pitch class of the harmony there, for passages no
+    transcription catches: sustained chords, tremolo and fast runs have no clear onsets, and Basic
+    Pitch found 10 notes in 20 s of Beethoven's First (playtest, 2026-11-10). Only fills gaps."""
+    import librosa
+    import numpy as np
+
+    hop = 512
+    y = librosa.resample(tonal_mono, orig_sr=sr, target_sr=22050)
+    chroma = librosa.feature.chroma_cqt(y=y, sr=22050, hop_length=hop)
+    loud = librosa.feature.rms(y=y, hop_length=hop)[0]
+    floor = float(np.percentile(loud, 20))
+    beat = 60.0 / bpm
+    notes: list[dict] = []
+    t = offset
+    while t < duration - beat:
+        a, b = int(t * 22050 / hop), int((t + beat * 0.5) * 22050 / hop) + 1
+        if b <= chroma.shape[1] and float(loud[a:b].mean()) > floor:
+            pitch_class = int(np.argmax(chroma[:, a:b].mean(axis=1)))
+            notes.append({"t": t, "d": beat * 0.8, "p": 60 + pitch_class})
+        t += beat
+    return notes
+
+
 def tempo_and_key(mono, sr: int) -> tuple[float, float, int]:
     """(bpm, first beat in seconds, semitone shift that moves the key to C major / A minor)."""
     import librosa
@@ -203,6 +251,48 @@ def snap_to_grid(notes: list[dict], bpm: float, offset: float, tolerance: float 
     return out
 
 
+# The voice leads only when it is at least this loud against the mix (RMS). Synth pads and leads
+# bleed into Demucs's vocal stem, so instrumental tracks measured 0.13 to 0.26 and were charted from
+# that bleed: long silent stretches (69 s in Siege Clock). Sung songs measure about 0.4 and up.
+VOICE_LEAD_RATIO = 0.3
+# A gap in the lead longer than this (seconds) is filled from another melodic line (playtest,
+# 2026-11-10: "some non-lyric songs had huge gaps with no notes"). Filled notes keep FILL_MARGIN
+# clear of the lead's notes either side.
+FILL_GAP = 4.0
+FILL_MARGIN = 0.4
+
+
+def transcribe_stem(audio, sr: int, out: pathlib.Path, name: str, sung: bool) -> list[dict]:
+    """Basic Pitch on one stem, through a lossless temporary copy."""
+    import numpy as np
+    import soundfile as sf
+
+    analysis = out / f".{name}_analysis.wav"
+    sf.write(str(analysis), np.clip(audio.T, -1, 1), sr, subtype="PCM_16")
+    try:
+        return transcribe(analysis, sung)
+    finally:
+        analysis.unlink(missing_ok=True)
+
+
+def fill_gaps(lead: list[dict], fillers: list[list[dict]], duration: float) -> list[dict]:
+    """The lead's notes, with every stretch of more than FILL_GAP seconds without one (including the
+    intro and outro) filled from the first filler line that has notes there."""
+    lead = sorted(lead, key=lambda n: n["t"])
+    edges = [-FILL_MARGIN] + [x for n in lead for x in (n["t"], n["t"] + n["d"])] + [duration + FILL_MARGIN]
+    out = list(lead)
+    for i in range(0, len(edges) - 1, 2):
+        start, end = edges[i] + FILL_MARGIN, edges[i + 1] - FILL_MARGIN
+        if end - start < FILL_GAP - 2 * FILL_MARGIN:
+            continue
+        for line in fillers:
+            found = [n for n in line if start <= n["t"] and n["t"] + n["d"] <= end]
+            if found:
+                out.extend(found)
+                break
+    return sorted(out, key=lambda n: n["t"])
+
+
 def import_audio(src: pathlib.Path, out: pathlib.Path, theme: str, title: str) -> dict:
     import librosa
     import numpy as np
@@ -222,21 +312,36 @@ def import_audio(src: pathlib.Path, out: pathlib.Path, theme: str, title: str) -
     stems = separate(mix, sr)
     vocal_rms = float(np.sqrt(np.mean(stems["vocals"] ** 2)))
     mix_rms = float(np.sqrt(np.mean(mix ** 2))) + 1e-9
-    sung = vocal_rms > 0.12 * mix_rms
+    sung = vocal_rms >= VOICE_LEAD_RATIO * mix_rms
     lead_name = "vocals" if sung else "other"
     lead = stems[lead_name]
     backing = sum(v for k, v in stems.items() if k != lead_name)
     out.mkdir(parents=True, exist_ok=True)
-    sf.write(out / "lead.wav", np.clip(lead.T, -1, 1), sr, subtype="PCM_16")
-    sf.write(out / "backing.wav", np.clip(backing.T, -1, 1), sr, subtype="PCM_16")
+    write_stem(out / "lead.ogg", lead, sr)
+    write_stem(out / "backing.ogg", backing, sr)
 
-    progress(0.66, "Finding the melody" if sung else "No vocal found: finding the lead instrument")
-    notes = transcribe(out / "lead.wav", sung)
-    if sung:
-        progress(0.78, "Checking every note against the voice")
-        notes = refine_with_pyin(notes, lead.mean(axis=0), sr)
-    progress(0.88, "Finding the tempo and key")
+    # Transcribe every melodic line: the lead charts the song, the others fill its long gaps.
+    progress(0.62, "Finding the melody" if sung else "No lead vocal: finding the lead instrument")
+    instrument = transcribe_stem(stems["other"], sr, out, "other", sung=False)
+    voice: list[dict] = []
+    if vocal_rms >= 0.12 * mix_rms:
+        progress(0.7, "Following the voice")
+        voice = refine_with_pyin(transcribe_stem(stems["vocals"], sr, out, "vocals", sung=True),
+                                 stems["vocals"].mean(axis=0), sr)
+    progress(0.78, "Filling the gaps")
+    bass = transcribe_stem(stems["bass"], sr, out, "bass", sung=False)
+    # Last resorts for a stretch none of the stems' lines covers (Beethoven's First kept 17 s of
+    # nothing): the top line of everything but the drums together, then a note on every beat at
+    # the harmony's strongest pitch.
+    tonal = sum(v for k, v in stems.items() if k != "drums")
+    whole = transcribe_stem(tonal, sr, out, "tonal", sung=False)
+    progress(0.86, "Finding the tempo and key")
     bpm, offset, shift = tempo_and_key(mix.mean(axis=0), sr)
+    beats = beat_line(tonal.mean(axis=0), sr, bpm, offset, duration)
+    if sung:
+        notes = fill_gaps(voice, [instrument, bass, whole, beats], duration)
+    else:
+        notes = fill_gaps(instrument, [voice, bass, whole, beats], duration)
     notes = snap_to_grid(merge_repeats(notes), bpm, offset)
     if len(notes) < 12:
         fail("Could not find a clear melody in that song.")
@@ -322,6 +427,11 @@ def import_midi(src: pathlib.Path, out: pathlib.Path, theme: str, title: str) ->
     if not (out / "backing.wav").exists() or not (out / "lead.wav").exists():
         fail("SuperCollider could not record the song: " + result.stdout[-300:])
     score.unlink(missing_ok=True)
+    import soundfile as sf
+    for stem in ("backing", "lead"):
+        audio, rate = sf.read(str(out / f"{stem}.wav"))
+        write_stem(out / f"{stem}.ogg", audio.T, rate)
+        (out / f"{stem}.wav").unlink()
     tempos = pm.get_tempo_changes()[1]
     bpm = float(tempos[0]) if len(tempos) else 120.0
     downbeats = pm.get_downbeats()
@@ -335,13 +445,20 @@ def import_midi(src: pathlib.Path, out: pathlib.Path, theme: str, title: str) ->
 
 def finish(out: pathlib.Path, src: pathlib.Path, theme: str, title: str, bpm: float, offset: float,
            duration: float, normal: list[dict], extra: dict) -> dict:
+    builtin = CONFIG["builtin"]
     meta = {
-        "id": out.name, "title": title, "theme": theme, "bpm": round(bpm, 3), "beats_per_bar": 4,
+        "id": builtin or out.name, "title": title, "theme": theme, "bpm": round(bpm, 3), "beats_per_bar": 4,
         "beat_offset": round(offset % (60.0 / bpm), 4), "duration": round(duration, 3),
-        "backing": "backing.wav", "lead": "lead.wav", "sections": [], "source": "imported",
+        "backing": f"res://assets/songs/{builtin}/backing.ogg" if builtin else "backing.ogg",
+        "lead": f"res://assets/songs/{builtin}/lead.ogg" if builtin else "lead.ogg",
+        "sections": [], "source": "builtin" if builtin else "imported",
         "original_file": src.name, **extra,
     }
-    chart = songlib.write_chart(out / "chart.json", meta, normal)
+    if CONFIG["station"]:
+        meta["station"] = CONFIG["station"]
+    chart_path = ROOT / f"game/data/songs/{builtin}.json" if builtin else out / "chart.json"
+    chart = songlib.write_chart(chart_path, meta, normal)
+    CONFIG["chart_path"] = chart_path
     holds = sum(1 for n in normal if n["d"] >= songlib.HOLD_MIN)
     progress(1.0, f"{len(normal)} notes, {holds} holds")
     return chart
@@ -353,11 +470,15 @@ def main() -> None:
     ap.add_argument("out_dir")
     ap.add_argument("--theme", default="backroads")
     ap.add_argument("--title", default=None)
+    ap.add_argument("--builtin", default=None, help="song id: make it part of the game, not the library")
+    ap.add_argument("--station", default=None, help="the radio station it comes from")
     args = ap.parse_args()
+    CONFIG["builtin"] = args.builtin
+    CONFIG["station"] = args.station
     src = pathlib.Path(args.input).expanduser()
     if not src.exists():
         fail(f"Cannot find {src}")
-    out = pathlib.Path(args.out_dir).expanduser()
+    out = ROOT / "game/assets/songs" / args.builtin if args.builtin else pathlib.Path(args.out_dir).expanduser()
     title = args.title or re.sub(r"[_-]+", " ", src.stem).strip().title()
     try:
         if src.suffix.lower() in (".mid", ".midi"):
@@ -369,7 +490,7 @@ def main() -> None:
     except Exception as exc:  # the game shows this line; the traceback goes to stderr
         traceback.print_exc()
         fail(f"{type(exc).__name__}: {exc}")
-    print(f"DONE {out / 'chart.json'}", flush=True)
+    print(f"DONE {CONFIG.get('chart_path', out / 'chart.json')}", flush=True)
 
 
 if __name__ == "__main__":

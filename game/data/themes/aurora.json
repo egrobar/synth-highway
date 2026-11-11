@@ -1,9 +1,9 @@
 {
  "id": "aurora",
- "name": "Aurora Pass",
- "genres": "Classical, ballads, traditional",
+ "name": "Ring Road",
+ "genres": "Classical, choral",
  "order": 5,
  "lead": "piano",
  "accent": "#7dffc8",
- "blurb": "A snowbound mountain pass, firs and chapels, under the northern lights."
+ "blurb": "A glass skyway along an orbital ring, Saturn's rings sweeping across the sky."
 }

@@ -20,19 +20,22 @@ const REACH: Array[int] = [4, 5]
 ## F and J: the keys with the homing bumps.
 const HOMING: Array[int] = [3, 6]
 
-## Which finger plays a lane, mirrored across the hands: 0 pinky, 1 ring, 2 middle, 3 index.
+## Which finger plays a lane, mirrored across the hands: 0 pinky, 1 ring, 2 middle, 3 index,
+## and 4 for G and H, the index finger's reach. Reach keys get their own colour: with F, G,
+## H and J all one colour, the middle of the road read as one wide lane.
 ## Notes, lanes and keys are coloured by finger, so the colour of an approaching note says
 ## which finger moves before the eye has worked out which of ten lanes it is in.
-const HOME_FINGERS: Array[int] = [0, 1, 2, 3, 3, 3, 3, 2, 1, 0]
+const HOME_FINGERS: Array[int] = [0, 1, 2, 3, 4, 4, 3, 2, 1, 0]
 ## The top-row keys W E R T Y U I O P, by standard touch-typing fingering.
 const SHARP_FINGERS: Array[int] = [1, 2, 3, 3, 3, 3, 2, 1, 0]
-const FINGER_NAMES: Array[String] = ["pinky", "ring", "middle", "index"]
+const FINGER_NAMES: Array[String] = ["pinky", "ring", "middle", "index", "index reach"]
 ## Chosen to stay apart from each other, from the orange of sharps and the red of a miss.
 const FINGER_COLORS: Array[Color] = [
 	Color(0.74, 0.52, 1.0),   # pinky: violet
 	Color(1.0, 0.88, 0.3),    # ring: yellow
 	Color(0.42, 1.0, 0.55),   # middle: green
 	Color(0.247, 0.847, 1.0), # index: cyan
+	Color(1.0, 0.45, 0.8),    # index reach (G, H): pink
 ]
 
 

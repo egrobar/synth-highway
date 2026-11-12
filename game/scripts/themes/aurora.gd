@@ -22,6 +22,16 @@ extends ThemeWorld
 ## materials named beacon_* blink here. Imported materials are shared by every copy of a model, so
 ## each is changed once. With high graphics on, ThemeWorld then weathers the rest (barely: this is a
 ## maintained station) and lays the surface maps chosen in `surfaces` on them by material name.
+##
+## The station answers the player (2026-11-11, ThemeWorld's on_* events). On a combo milestone a
+## transit ship undocks from a docking arm ahead (or from the deck beside the road when none is in
+## view), lights its engines and shoots away down the ring into the sky on a glowing trail, and a
+## cascade of light races away along the guide-light strips and the skyway's kerb channels; bigger
+## milestones launch two ships, then three, and send more cascades. A fast streak flares the solar
+## wings with the sun's glint and sends a cascade; a long combo keeps the strips brighter with slow
+## cascades rolling down them. Faltering makes the station's lights flicker and sag, and a maintenance
+## drone ahead sparks and tumbles to the deck; getting going again steadies the lights and a
+## replacement drone flies down into its place.
 
 const WALL_LENGTH := 8.0  # must match WALL_LENGTH in tools/themes/aurora/props.py
 const STRIP_LENGTH := 12.0  # must match STRIP_LENGTH in tools/themes/aurora/props.py
@@ -40,6 +50,47 @@ var _white: Array[Dictionary] = []
 var _seen_materials: Dictionary = {}
 var _clock: float = 0.0
 var _station: Node3D
+# The player's events.
+const CASCADE_SHADER := """
+shader_type spatial;
+render_mode unshaded;
+uniform vec3 colour : source_color = vec3(0.55, 1.0, 0.78);
+uniform float energy = 1.5;
+uniform float level = 1.0;
+uniform float wave_z = 1000.0;
+uniform float wave = 0.0;
+uniform float wave_z2 = 1000.0;
+uniform float wave2 = 0.0;
+varying float wz;
+void vertex() {
+	wz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).z;
+}
+void fragment() {
+	float w = wave * exp(-pow((wz - wave_z) / 10.0, 2.0)) + wave2 * exp(-pow((wz - wave_z2) / 10.0, 2.0));
+	ALBEDO = colour * energy * (level + 3.5 * w);
+}
+"""
+const SHIPS := 3
+var _cascade: Array[ShaderMaterial] = []
+var _waves: Array[float] = []  # start times of cascades still running
+var _next_flow_wave: float = 0.0
+var _ships: Array[Dictionary] = []
+var _arms: Array[Node3D] = []
+var _wings: Array[MeshInstance3D] = []
+var _glint: float = 0.0
+var _dome_lights: Array[Dictionary] = []
+var _power: float = 1.0
+var _target_power: float = 1.0
+var _flick: float = 1.0
+var _flick_next: float = 0.0
+var _faller: Node3D
+var _faller_age: float = -1.0
+var _faller_spin: Vector3 = Vector3.ZERO
+var _sparks: CPUParticles3D
+var _alarm: MeshInstance3D
+var _relief: Node3D
+var _relief_age: float = -1.0
+var _fx := RandomNumberGenerator.new()
 
 
 func build() -> void:
@@ -107,6 +158,14 @@ func build() -> void:
 		var node := _place(entry[0], entry[1], entry[2], entry[3], entry[4])
 		if entry[0] == "dome":
 			_glow(node, Vector3(0.0, 2.6, 0.0), Color(0.86, 1.0, 0.92), 13.0, 1.4)
+		elif entry[0] == "docking_arm":
+			_arms.append(node)
+		elif entry[0] == "solar_wing":
+			# The sun's glint off the blankets, shown when a streak flares the wings.
+			var glint := fx_sprite(Color(1.0, 1.0, 0.92, 0.0), 18.0, 2.5)
+			glint.position = Vector3(0.0, 11.0, 0.0)
+			node.add_child(glint)
+			_wings.append(glint)
 
 	_station = (load(asset("models/station_hub.glb")) as PackedScene).instantiate()
 	_station.position = STATION_POSITION
@@ -117,8 +176,10 @@ func build() -> void:
 	# Motes: very dim specks drifting slowly past (their colour is their brightness: the bead is unshaded).
 	drifters(Color(0.5, 0.64, 0.6), 60, 3.0, 12.0, Vector3(0.0, 0.08, 6.0), 0.03, Vector3.ZERO, 0.35)
 
+	_build_events()
 	for found: Node in find_children("*", "MeshInstance3D", true, false):
 		_prepare_materials(found as MeshInstance3D)
+	_cascade_strips()
 	# The distant station sits far beyond the fog: it keeps its own colours instead.
 	for found: Node in _station.find_children("*", "MeshInstance3D", true, false):
 		var mesh := (found as MeshInstance3D).mesh
@@ -140,6 +201,7 @@ func _process(delta: float) -> void:
 		(entry["mat"] as StandardMaterial3D).emission_energy_multiplier = float(entry["base"]) * white_level
 	if _station:
 		_station.rotate_object_local(Vector3.FORWARD, delta * 0.025)
+	_update_events(delta)
 
 
 ## Rows of solar panels on the right, in a pattern that repeats every four slots (with gaps, so the
@@ -178,6 +240,7 @@ func _glow(node: Node3D, at: Vector3, colour: Color, reach: float, energy: float
 	light.light_energy = energy
 	light.position = at
 	node.add_child(light)
+	_dome_lights.append({"light": light, "base": energy})
 
 
 ## Glass becomes see-through (the skyway walls barely there, the domes a little more frosted);
@@ -207,3 +270,264 @@ func _prepare_materials(mesh_instance: MeshInstance3D) -> void:
 			_green.append({"mat": mat, "base": mat.emission_energy_multiplier})
 		elif key.begins_with("beacon_white"):
 			_white.append({"mat": mat, "base": mat.emission_energy_multiplier})
+
+
+# ---------------------------------------------------------------- answering the player
+
+func on_milestone(level: int) -> void:
+	var ships: int = 1 if level < 3 else (2 if level == 3 else 3)
+	for i: int in ships:
+		_launch(i, float(i) * 0.9)
+	event_sound("launch", -11.0)
+	for i: int in mini(level, 4):
+		_waves.append(_clock + 0.25 * float(i))
+	super(level)
+
+
+func on_streak(strength: float) -> void:
+	_glint = maxf(_glint, 0.5 + 0.5 * strength)
+	_waves.append(_clock)
+	super(strength * 0.4)
+
+
+func on_burst(strength: float, kind: String) -> void:
+	_waves.append(_clock)
+	super(strength, kind)
+
+
+func on_falter(severity: float) -> void:
+	_target_power = minf(_target_power, 1.0 - 0.7 * severity)
+	event_sound("flicker", -13.0)
+	if _faller_age >= 0.0:
+		return
+	# A maintenance drone ahead on the left (beyond the glass, over the deck) loses it: sparks, a
+	# wobble, and a tumble down onto the deck, where the drive carries it past.
+	_faller.position = Vector3(-(road_half + 9.0), 0.0, -55.0)
+	_faller.rotation = Vector3.ZERO
+	_faller.visible = true
+	ride(_faller)
+	_faller_age = 0.0
+	_faller_spin = Vector3(_fx.randf_range(2.0, 4.0), _fx.randf_range(-3.0, 3.0), _fx.randf_range(3.0, 6.0))
+	if not calm():
+		_sparks.restart()
+
+
+func on_recover() -> void:
+	_target_power = 1.0
+	# A replacement drone flies down into its place ahead.
+	_relief.position = Vector3(-(road_half + 11.0), 26.0, -110.0)
+	_relief.visible = true
+	ride(_relief)
+	_relief_age = 0.0
+	super()
+
+
+func on_settle() -> void:
+	_target_power = 1.0
+	_power = 1.0
+	_glint = 0.0
+	_waves.clear()
+	_faller_age = -1.0
+	_faller.visible = false
+	unride(_faller)
+	_relief_age = -1.0
+	_relief.visible = false
+	unride(_relief)
+	_sparks.restart()
+	_sparks.emitting = false
+	for ship: Dictionary in _ships:
+		_park(ship)
+
+
+func _build_events() -> void:
+	_fx.seed = 1610
+	event_tint = Color(0.75, 1.0, 0.88)
+	for i: int in SHIPS:
+		var root := Node3D.new()
+		root.visible = false
+		root.scale = Vector3.ONE * 1.6  # a big transit ship: it has to read 200 m out
+		add_child(root)
+		var ship: Node3D = (load(asset("models/ship.glb")) as PackedScene).instantiate()
+		root.add_child(ship)
+		var engines := Node3D.new()
+		engines.position = Vector3(0.0, 2.1, 0.9)
+		ship.add_child(engines)
+		var core := fx_sprite(Color(0.65, 1.0, 0.88, 0.0), 7.0, 4.0, false)
+		engines.add_child(core)
+		var trail := fx_particles(fx_material("glow", 2.2, false), 280, 2.6, 2.4, fx_ramp([
+			[0.0, Color(0.85, 1.0, 0.95, 1.0)], [0.3, Color(0.4, 1.0, 0.75, 0.7)], [1.0, Color(0.2, 0.6, 0.9, 0.0)]]))
+		trail.spread = 3.0
+		engines.add_child(trail)
+		_ships.append({"root": root, "ship": ship, "core": core, "trail": trail, "age": -1.0, "delay": 0.0, "side": 1.0})
+	# The drone that falls (with its sparks), and the one that replaces it: bigger than the deck's
+	# own, so they read from the road.
+	_faller = (load(asset("models/drone.glb")) as PackedScene).instantiate()
+	_faller.scale = Vector3.ONE * 2.4
+	_faller.visible = false
+	add_child(_faller)
+	_sparks = fx_particles(fx_material("glow", 5.0), 90, 1.2, 0.2, fx_ramp([
+		[0.0, Color(1.0, 1.0, 0.9, 1.0)], [0.4, Color(0.6, 1.0, 0.8, 1.0)], [1.0, Color(0.3, 0.8, 1.0, 0.0)]]))
+	_sparks.local_coords = true
+	_sparks.one_shot = true
+	_sparks.explosiveness = 0.5
+	_sparks.position = Vector3(0.0, 4.4, 0.0)
+	_sparks.spread = 180.0
+	_sparks.initial_velocity_min = 1.5
+	_sparks.initial_velocity_max = 4.0
+	_sparks.gravity = Vector3(0.0, -4.0, 0.0)
+	_faller.add_child(_sparks)
+	# Its warning light, blinking red as it goes down and dying when it lands.
+	_alarm = fx_sprite(Color(1.0, 0.25, 0.2, 0.0), 1.6, 4.0)
+	_alarm.position = Vector3(0.0, 4.7, 0.0)
+	_faller.add_child(_alarm)
+	_relief = (load(asset("models/drone.glb")) as PackedScene).instantiate()
+	_relief.scale = Vector3.ONE * 2.4
+	_relief.visible = false
+	add_child(_relief)
+
+
+## The guide-light strips and the skyway's kerb channels (materials strip*) get one shared shader
+## that carries cascades of light along them by world position, and dims and flickers on faltering.
+func _cascade_strips() -> void:
+	var made: Dictionary = {}
+	for found: Node in find_children("*", "MeshInstance3D", true, false):
+		var instance := found as MeshInstance3D
+		if instance.mesh == null:
+			continue
+		for s: int in instance.mesh.get_surface_count():
+			var mat := instance.mesh.surface_get_material(s) as StandardMaterial3D
+			if mat == null or not mat.resource_name.begins_with("strip"):
+				continue
+			var key: int = mat.get_instance_id()
+			if not made.has(key):
+				var cascade := ShaderMaterial.new()
+				var shader := Shader.new()
+				shader.code = CASCADE_SHADER
+				cascade.shader = shader
+				cascade.set_shader_parameter("colour", mat.emission)
+				cascade.set_shader_parameter("energy", mat.emission_energy_multiplier)
+				made[key] = cascade
+				_cascade.append(cascade)
+			instance.set_surface_override_material(s, made[key])
+
+
+## A ship undocks beside a docking arm in view (or from the deck ahead on the right), then lights
+## its engines and leaves down the ring, climbing into the sky.
+func _launch(index: int, delay: float) -> void:
+	var ship: Dictionary = _ships[index]
+	if float(ship["age"]) >= 0.0:
+		return
+	var root: Node3D = ship["root"]
+	var arm: Node3D = null
+	for candidate: Node3D in _arms:
+		if ahead_in_view(candidate.position, -60.0, -260.0, 50.0) and (arm == null or candidate.position.z > arm.position.z):
+			arm = candidate
+	if arm != null and index == 0:
+		var side: float = signf(arm.position.x)
+		root.position = arm.position + Vector3(side * 25.0, 9.5, 6.0)
+	else:
+		var side: float = 1.0 if index % 2 == 0 else -1.0
+		root.position = Vector3(side * (road_half + 52.0), 9.0, -160.0 - 30.0 * float(index))
+	ship["side"] = signf(root.position.x)
+	root.visible = true
+	(ship["ship"] as Node3D).position = Vector3.ZERO
+	(ship["ship"] as Node3D).rotation = Vector3.ZERO
+	ride(root)
+	ship["age"] = 0.0
+	ship["delay"] = delay
+
+
+func _park(ship: Dictionary) -> void:
+	var root: Node3D = ship["root"]
+	unride(root)
+	root.visible = false
+	(ship["trail"] as CPUParticles3D).emitting = false
+	ship["age"] = -1.0
+
+
+func _update_events(delta: float) -> void:
+	var along: float = (Highway.LENGTH / Highway.lookahead) * _speed * (1.0 + HEAT_SPEED * _heat)
+	for ship: Dictionary in _ships:
+		if float(ship["age"]) < 0.0:
+			continue
+		ship["age"] = float(ship["age"]) + delta
+		var a: float = float(ship["age"]) - float(ship["delay"])
+		var body: Node3D = ship["ship"]
+		var burn: float = 0.0
+		if a > 0.0 and a <= 1.3:
+			# Undocking: easing out sideways, away from the road, and up.
+			var u: float = smoothstep(0.0, 1.3, a)
+			body.position = Vector3(float(ship["side"]) * 5.0 * u, 2.5 * u, 0.0)
+		elif a > 1.3:
+			var t: float = a - 1.3
+			if t - delta <= 0.0:
+				flash(Color(0.75, 1.0, 0.9), 0.4, rad_to_deg(atan2((ship["root"] as Node3D).position.x, 60.0)))
+			body.rotation.x = deg_to_rad(11.0) * clampf(t / 1.2, 0.0, 1.0)
+			var nose := Vector3(0.0, sin(body.rotation.x), -cos(body.rotation.x))
+			body.position += nose * (6.0 + 34.0 * t) * delta
+			burn = clampf(t / 0.3, 0.0, 1.0)
+			if t > 9.0:
+				_park(ship)
+				continue
+		var trail: CPUParticles3D = ship["trail"]
+		trail.emitting = burn > 0.0
+		if trail.emitting:
+			# The trail stays where it was laid, so it comes back past with the ring.
+			trail.direction = Vector3(0.0, 0.0, 1.0)
+			trail.initial_velocity_min = along
+			trail.initial_velocity_max = along
+		((ship["core"] as MeshInstance3D).material_override as ShaderMaterial).set_shader_parameter(
+			"tint", Color(0.65, 1.0, 0.88, 0.25 + 0.75 * burn if a > 0.0 else 0.15))
+	# Cascades race away down the strips, about 160 m a second; flow keeps slow ones rolling.
+	if flow() > 0.3 and _clock >= _next_flow_wave:
+		_next_flow_wave = _clock + 3.0
+		_waves.append(_clock)
+	var fronts: Array[float] = []
+	for i: int in range(_waves.size() - 1, -1, -1):
+		var age: float = _clock - _waves[i]
+		if age > 2.2:
+			_waves.remove_at(i)
+		elif age >= 0.0 and fronts.size() < 2:
+			fronts.append(age)
+	_power = move_toward(_power, _target_power, delta * (1.2 if _target_power < _power else 0.5))
+	if _clock >= _flick_next:
+		_flick_next = _clock + _fx.randf_range(0.04, 0.12)
+		var unsteady: bool = _power < 0.95 or absf(_power - _target_power) > 0.02
+		_flick = _fx.randf_range(0.1, 0.6) if unsteady and _fx.randf() < 0.35 else 1.0
+	var lit: float = _power * (1.0 if calm() else _flick)
+	for cascade: ShaderMaterial in _cascade:
+		cascade.set_shader_parameter("level", lit * (1.0 + 0.4 * flow()))
+		for k: int in 2:
+			var on: bool = k < fronts.size()
+			cascade.set_shader_parameter("wave_z" if k == 0 else "wave_z2", 15.0 - 160.0 * fronts[k] if on else 1000.0)
+			cascade.set_shader_parameter("wave" if k == 0 else "wave2", (1.0 - fronts[k] / 2.2) if on else 0.0)
+	for entry: Dictionary in _dome_lights:
+		(entry["light"] as OmniLight3D).light_energy = float(entry["base"]) * lit
+	_glint = maxf(_glint - delta * 0.5, 0.0)
+	for glint: MeshInstance3D in _wings:
+		var shine: float = _glint * (0.7 + 0.3 * sin(_clock * 9.0 + glint.global_position.z * 0.1))
+		glint.visible = shine > 0.01
+		(glint.material_override as ShaderMaterial).set_shader_parameter("tint", Color(1.0, 1.0, 0.92, shine))
+	if _faller_age >= 0.0:
+		_faller_age += delta
+		var f: float = _faller_age
+		if f < 0.7:
+			_faller.rotation = Vector3(sin(f * 30.0) * 0.12, 0.0, sin(f * 23.0) * 0.15)  # the wobble
+		else:
+			var g: float = f - 0.7
+			_faller.rotation += _faller_spin * delta * clampf(1.0 - g / 1.4, 0.0, 1.0)
+			_faller.position.y = maxf(-2.4 * 4.4 * minf(g * g * 1.2, 1.0) + 0.3, -9.9)
+		var blink: float = 1.0 if fmod(f, 0.3) < 0.15 or calm() else 0.15
+		(_alarm.material_override as ShaderMaterial).set_shader_parameter("tint",
+			Color(1.0, 0.25, 0.2, blink * clampf((2.6 - f) / 0.4, 0.0, 1.0)))
+		if _faller.position.z > 30.0:
+			_faller_age = -1.0
+			_faller.visible = false
+			unride(_faller)
+	if _relief_age >= 0.0:
+		_relief_age += delta
+		_relief.position.y = 26.0 * (1.0 - smoothstep(0.0, 3.0, _relief_age))
+		if _relief.position.z > 30.0:
+			_relief_age = -1.0
+			_relief.visible = false
+			unride(_relief)

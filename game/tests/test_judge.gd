@@ -24,6 +24,12 @@ func _init() -> void:
 	test_grade_reflects_dropped_holds()
 	test_manual_clock()
 	test_key_map()
+	test_power_chord_both_hit()
+	test_power_chord_one_missed()
+	test_power_chord_keys_a_little_apart()
+	test_three_note_power_chord()
+	test_power_chord_with_a_hold()
+	test_chart_levels_and_power_flags()
 	print("%d checks, %d failures" % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -57,9 +63,9 @@ func test_tap_windows() -> void:
 
 func test_miss_after_window() -> void:
 	var j := judge_for([[1.0, 0.2, 60]])
-	j.advance(1.15)
+	j.advance(1.0 + Judge.GOOD_WINDOW - 0.01)
 	check(j.misses == 0, "not missed while still inside the window")
-	j.advance(1.17)
+	j.advance(1.0 + Judge.GOOD_WINDOW + 0.01)
 	check(j.misses == 1 and j.notes[0].state == Chart.NoteState.MISSED, "missed after the window closes")
 
 
@@ -217,3 +223,94 @@ func test_key_map() -> void:
 	check(j.wrong_presses == 1 and j.hits == 0, "the home key under a sharp does not play the sharp")
 	j.press(12, "r", 1.0)
 	check(j.hits == 1, "the sharp's own key plays it")
+
+
+# ---------------------------------------------------------------- power chords (Hard)
+
+func test_power_chord_both_hit() -> void:
+	var j := judge_for([[1.0, 0.2, 3, 1], [1.0, 0.2, 6, 1], [2.0, 0.2, 4]])
+	j.press(3, KEY_F, 1.0)
+	check(j.notes[1].state == Chart.NoteState.PENDING, "one key of a chord leaves the other note waiting")
+	j.press(6, KEY_J, 1.0)
+	check(j.notes[0].verdict == "perfect" and j.notes[1].verdict == "perfect", "both notes of a chord are hit")
+	check(j.hits == 2 and j.combo == 2 and j.wrong_presses == 0, "a chord is two hits, no wrong press")
+
+
+func test_power_chord_one_missed() -> void:
+	var j := judge_for([[1.0, 0.2, 3, 1], [1.0, 0.2, 6, 1]])
+	j.press(6, KEY_J, 1.02)
+	j.advance(1.0 + Judge.GOOD_WINDOW + 0.01)
+	var f: Chart.Note = j.notes[0] if j.notes[0].lane == 3 else j.notes[1]
+	var jn: Chart.Note = j.notes[1] if j.notes[0].lane == 3 else j.notes[0]
+	check(jn.state == Chart.NoteState.HIT, "the pressed half of the chord is hit")
+	check(f.state == Chart.NoteState.MISSED and j.misses == 1, "the unpressed half is missed on its own")
+	check(j.hits == 1 and j.combo == 0, "missing half a chord breaks the combo")
+	# Pressing the same key twice cannot take both halves.
+	var twice := judge_for([[1.0, 0.2, 3, 1], [1.0, 0.2, 6, 1]])
+	twice.press(3, KEY_F, 1.0)
+	twice.press(3, KEY_F, 1.01)
+	check(twice.hits == 1 and twice.wrong_presses == 1, "one key cannot play both notes of a chord")
+
+
+func test_power_chord_keys_a_little_apart() -> void:
+	# Two fingers never land on the same frame: 40 ms apart is still a clean chord.
+	var j := judge_for([[1.0, 0.2, 2, 1], [1.0, 0.2, 7, 1]])
+	j.press(7, KEY_K, 0.98)
+	j.advance(0.99)
+	j.press(2, KEY_D, 1.02)
+	j.advance(1.03)
+	check(j.notes[0].verdict == "perfect" and j.notes[1].verdict == "perfect", "both halves perfect when 40 ms apart")
+
+
+func test_three_note_power_chord() -> void:
+	var j := judge_for([[1.0, 0.2, 0, 1], [1.0, 0.2, 4, 1], [1.0, 0.2, 9, 1]])
+	j.press(0, KEY_A, 1.0)
+	j.press(9, KEY_SEMICOLON, 1.0)
+	j.press(4, KEY_G, 1.01)
+	check(j.hits == 3 and j.misses == 0 and j.wrong_presses == 0, "a three-note chord is three hits")
+
+
+func test_power_chord_with_a_hold() -> void:
+	var j := judge_for([[1.0, 2.0, 3, 1], [1.0, 0.2, 6, 1]])
+	j.press(3, KEY_F, 1.0)
+	j.press(6, KEY_J, 1.0)
+	j.release(KEY_J, 1.1)
+	j.advance(2.0)
+	check(j.notes[0].hold_state == Chart.HoldState.HOLDING, "letting go of the tap half leaves the held half holding")
+	j.release(KEY_F, 3.0)
+	check(j.notes[0].hold_state == Chart.HoldState.COMPLETE and j.holds_completed == 1, "the held half completes")
+
+
+func test_chart_levels_and_power_flags() -> void:
+	var base := {"id": "t", "title": "T", "theme": "backroads", "bpm": 120.0, "beats_per_bar": 4, "duration": 4.0,
+		"backing": "b.ogg", "lead": "l.ogg"}
+	var two: Dictionary = base.duplicate()
+	two["difficulties"] = {"easy": [{"t": 1.0, "d": 0.2, "p": 60, "l": 0}],
+		"normal": [{"t": 1.0, "d": 0.2, "p": 60, "l": 0}, {"t": 1.5, "d": 0.2, "p": 62, "l": 1}]}
+	var path_two := "user://test_levels_two.json"
+	_write_json(path_two, two)
+	var fallback := Chart.load_file(path_two, "hard")
+	check(fallback.difficulty == "normal" and fallback.notes.size() == 2, "a chart without Hard plays Normal when Hard is asked for")
+	check(not Chart.has_level(two, "hard") and Chart.playable_levels(two) == ["easy", "normal"], "Hard is not offered where it is not charted")
+	var three: Dictionary = two.duplicate(true)
+	three["difficulties"]["hard"] = [{"t": 1.0, "d": 0.2, "p": 60, "l": 6, "pw": 1}, {"t": 1.0, "d": 0.2, "p": 55, "l": 3, "pw": 1},
+		{"t": 1.5, "d": 0.2, "p": 62, "l": 13, "s": 1}]
+	var path_three := "user://test_levels_three.json"
+	_write_json(path_three, three)
+	var hard := Chart.load_file(path_three, "hard")
+	check(hard.difficulty == "hard" and Chart.playable_levels(three).has("hard"), "a charted Hard loads as Hard")
+	check(hard.notes[0].power and hard.notes[1].power and not hard.notes[2].power, "pw marks power notes")
+	check(hard.notes[0].lane == 3 and hard.notes[1].lane == 6, "a chord's notes come in lane order")
+	var chords: Array = hard.power_chords()
+	check(chords.size() == 1 and (chords[0] as Array).size() == 2, "the two power notes make one chord")
+	var old := base.duplicate()
+	old["notes"] = [{"t": 1.0, "d": 0.2, "p": 60}]
+	check(Chart.resolve_level(old, "hard") == "normal" and Chart.resolve_level(old, "easy") == "normal", "a one-list chart plays its list for every level")
+	DirAccess.remove_absolute(path_two)
+	DirAccess.remove_absolute(path_three)
+
+
+func _write_json(path: String, data: Dictionary) -> void:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(JSON.stringify(data))
+	file.close()

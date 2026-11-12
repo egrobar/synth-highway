@@ -77,8 +77,10 @@ static func _add(songs: Array[Dictionary], path: String) -> void:
 		"path": path, "notes": (meta.get("notes", []) as Array).size(),
 		# The space game radio station a song came from, if any (tools/importer/import_radio.sh).
 		"station": meta.get("station", ""),
-		# Per difficulty: Difficulty.rate's {"level", "score", "reasons", "peak_nps"}.
+		# Per difficulty: Difficulty.rate's {"level", "score", "reasons", "peak_nps"}. Only for the
+		# levels the chart carries (Easy and Normal always; Hard where charted: "levels").
 		"ratings": _ratings_for(path, meta),
+		"levels": Chart.playable_levels(meta),
 	}
 	songs.append(entry)
 
@@ -90,10 +92,15 @@ static func _ratings_for(path: String, meta: Dictionary) -> Dictionary:
 		return cached["ratings"]
 	var levels: Dictionary = meta.get("difficulties", {})
 	var ratings: Dictionary = {}
-	for level: String in Chart.DIFFICULTIES:
-		ratings[level] = Difficulty.rate(levels.get(level, meta.get("notes", [])))
+	for level: String in Chart.playable_levels(meta):
+		ratings[level] = Difficulty.rate(levels.get(Chart.resolve_level(meta, level), meta.get("notes", [])))
 	_rating_cache[path] = {"stamp": stamp, "ratings": ratings}
 	return ratings
+
+
+## Whether a song has a chart at `difficulty` (Hard is missing from older charts).
+static func has_level(song: Dictionary, difficulty: String) -> bool:
+	return (song.get("levels", ["easy", "normal"]) as Array).has(difficulty)
 
 
 ## A song's level (1-10) at one difficulty, as a whole number for menus.

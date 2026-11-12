@@ -8,7 +8,7 @@ extends RouteSkin
 ## the song list; a guard rail along the shore. Pill tabs (the chosen one coral); DM Serif Display
 ## for the region name, the titles and the italic "feel" lines, Manrope for the rest. The chosen
 ## song is a translucent cream plate with a lamp dot; frosted plates hold the selected song (the
-## giant shows above it) and the Easy / Normal cards; a pill practice toggle and a coral pill to
+## giant shows above it) and the Easy / Normal / Hard cards; a pill practice toggle and a coral pill to
 ## drive. The design's frosted glass (backdrop blur) is a darker translucent fill here, so the
 ## giant's bands and the glitter behind never show through text.
 
@@ -32,6 +32,9 @@ const STAR := Color("#E6F3FF")
 const GLASS := Color(Color("#020C12"), 0.95)
 const GLASS_WARM := Color(Color("#28100E"), 0.95)
 const GLASS_TEAL := Color(Color("#062628"), 0.95)
+## Hard's accent and glass: a deeper rose past Normal's coral.
+const ROSE := Color("#FF5E86")
+const GLASS_ROSE := Color(Color("#2A0A16"), 0.95)
 
 ## The giant: the top half of a 600 px disc sitting on the horizon, behind the sea.
 const GIANT_C := Vector2(920, 470)
@@ -65,7 +68,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_load(s)
 	_plate(s, m)
 	if not (m["song"] as Dictionary).is_empty():
-		for i: int in 2:
+		for i: int in mini((m["cards"] as Array).size(), CARDS.size()):
 			_card(s, CARDS[i], m["cards"][i])
 		_practice(s, m)
 	_drive(s, m)
@@ -381,12 +384,23 @@ static func _wrap_two(value: String, f: Font, size: int, width: float) -> Array[
 	return out
 
 
+## A difficulty card, each level with its own accent: cyan Easy, coral Normal, rose Hard. Three
+## share the zone two had, so the feel line drops its second reason (or ellipsizes) to fit.
 func _card(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
+	var level: String = str(card.get("key", str(card["name"]).to_lower()))
+	var accent: Color = {"easy": CYAN, "hard": ROSE}.get(level, CORAL)
+	if not card.get("available", true):
+		# Dimmed by its type and edge, not by thinner glass: the giant's bands showed through
+		# at 0.6 and struck through the text.
+		box(s, rect, GLASS, Color(FOAM, 0.16), 1.0, 16.0)
+		var bx: float = rect.position.x + 19.0
+		var bw: float = rect.size.x - 38.0
+		text(s, Rect2(bx, rect.position.y + 17, bw, 20), str(card["name"]), font("Manrope", 800, 2.0), 15, Color(accent, 0.45))
+		text(s, Rect2(bx, rect.position.y + 44, bw, 22), "Not charted yet", font("DM Serif Display Italic"), 16, Color(SLATE, 0.8))
+		return
 	var on: bool = card["selected"]
-	var easy: bool = str(card["name"]) == "EASY"
-	var accent: Color = CYAN if easy else CORAL
 	if on:
-		box(s, rect, GLASS_TEAL if easy else GLASS_WARM, accent, 2.0, 16.0)
+		box(s, rect, {"easy": GLASS_TEAL, "hard": GLASS_ROSE}.get(level, GLASS_WARM), accent, 2.0, 16.0)
 	else:
 		box(s, rect, GLASS, Color(accent, 0.45), 1.0, 16.0)
 	var x: float = rect.position.x + 19.0
@@ -394,14 +408,18 @@ func _card(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
 	var head_font: Font = font("Manrope", 800, 2.0)
 	text(s, Rect2(x, rect.position.y + 17, w, 20), str(card["name"]), head_font, 15, accent)
 	text(s, Rect2(x, rect.position.y + 17, w, 20), "LV %d" % int(card["level"]), head_font, 15, accent, HORIZONTAL_ALIGNMENT_RIGHT)
-	var best: String = str(card["best"])
-	var best_font: Font = font("Manrope", 800, 1.0)
-	var best_w: float = (text_width("BEST " + best, best_font, 12) + 10.0) if not best.is_empty() else 0.0
-	text(s, Rect2(x, rect.position.y + 46, w - best_w, 19), str(card["counts"]), font("Manrope", 600), 14, FOAM)
-	if not best.is_empty():
-		text(s, Rect2(x, rect.position.y + 46, w, 19), "BEST " + best, best_font, 12, accent, HORIZONTAL_ALIGNMENT_RIGHT)
+	text(s, Rect2(x, rect.position.y + 46, w, 19), str(card["counts"]), font("Manrope", 600), 14, FOAM)
 	text(s, Rect2(x, rect.position.y + 68, w, 18), str(card["keys"]), font("Manrope"), 13, SPRAY if on else SLATE)
-	text(s, Rect2(x, rect.position.y + 89, w, 22), str(card["feel"]), font("DM Serif Display Italic"), 16, accent)
+	# The best grade sits at the end of the feel line, which gives up its second reason for it
+	# (beside the counts it cut "177 notes · 15 holds" short on these narrower cards).
+	var best: String = str(card["best"])
+	var feel_w: float = w
+	if not best.is_empty():
+		var best_font: Font = font("Manrope", 800, 1.0)
+		text(s, Rect2(x, rect.position.y + 89, w, 22), "BEST " + best, best_font, 12, accent, HORIZONTAL_ALIGNMENT_RIGHT)
+		feel_w -= text_width("BEST " + best, best_font, 12) + 10.0
+	var feel_font: Font = font("DM Serif Display Italic")
+	text(s, Rect2(x, rect.position.y + 89, feel_w, 22), fit_list(str(card["feel"]), feel_font, 16, feel_w), feel_font, 16, accent)
 
 
 # ---------------------------------------------------------------- practice and drive

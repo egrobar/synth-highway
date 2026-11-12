@@ -19,6 +19,16 @@ extends ThemeWorld
 ## groups), so a scaled landmark keeps its waterline and the prop shader's grime, measured up from the
 ## model's origin, is a band of wet grime and algae just above the water. `surfaces` sets the shader's
 ## relief and grain per material: the ice map at full strength crinkled big facets like foil.
+##
+## The shore answers the player (2026-11-11, ThemeWorld's on_* events). On a combo milestone a line
+## of cryo-geysers erupts one after another across the ice on the left and the beacon towers' beams
+## flare and whirl; from the second milestone an ice cliff out in the sea ahead calves, a spire of
+## ice toppling into the water with a burst of spray and a ring of foam; each milestone sets off more
+## geysers. A long combo lights an aurora in the sky, curtains of green and violet over the sea (a
+## milestone flares it). A fast streak spins the beams and pops a geyser. Faltering cracks the ice
+## beside the road, a glowing fracture splitting outward with shards flying, and fog rolls in over
+## the sea and the ice (thicker the worse it is); getting going again lifts the fog and the crack
+## fades.
 
 const RAIL_LENGTH := 6.0  # must match RAIL_LENGTH in tools/themes/coast/props.py
 const BANK_LENGTH := 12.0  # must match BANK_LENGTH in tools/themes/coast/props.py
@@ -139,6 +149,26 @@ var _blinkers: Array[Dictionary] = []  # {"mat": StandardMaterial3D, "phase": fl
 var _floe_groups: Array[Node3D] = []
 var _bobbers: Array[Dictionary] = []  # {"node": Node3D, "phase": float, "heave": float, "roll": float}
 var _geysers: Array[Dictionary] = []  # {"plume": CPUParticles3D, "offset": float}
+# The player's events.
+const EVENT_VENTS := 6
+var _beam_mats: Array[ShaderMaterial] = []
+var _beam_spin: float = 0.0
+var _beam_flare: float = 0.0
+var _vent_field: Node3D
+var _vents: Array[Dictionary] = []  # {"node", "plume", "glow", "at": float (clock time to erupt), "until": float}
+var _calve: Dictionary = {}
+var _aurora: ShaderMaterial
+var _aurora_boost: float = 0.0
+var _fog: float = 0.0
+var _target_fog: float = 0.0
+var _base_fog: float = 0.0
+var _base_haze: float = 0.0
+var _mist: Array[CPUParticles3D] = []
+var _crack: MeshInstance3D
+var _crack_mat: ShaderMaterial
+var _crack_age: float = -1.0
+var _shards: CPUParticles3D
+var _fx := RandomNumberGenerator.new()
 
 
 func build() -> void:
@@ -234,6 +264,8 @@ func build() -> void:
 	for entry: Array in [[12.0, 210.0, 1.1, 0.0], [22.0, 362.0, 0.8, 5.5]]:
 		var vent := _landmark("geyser", -1.0, entry[0], entry[1], entry[2])
 		_geysers.append({"plume": _make_plume(vent), "offset": entry[3]})
+	event_tint = Color(0.75, 0.92, 1.0)
+	_build_events()
 
 
 func _process(delta: float) -> void:
@@ -241,8 +273,14 @@ func _process(delta: float) -> void:
 	_clock += delta
 	if _ocean:
 		_ocean.set_shader_parameter("travel", distance())
+	# The beams sweep; a milestone or a streak flares them and whirls them round.
+	_beam_flare = maxf(_beam_flare - delta * 0.3, 0.0)
+	_beam_spin += delta * (0.6 + (1.2 if calm() else 3.4) * _beam_flare)
 	for i: int in _beam_pivots.size():
-		_beam_pivots[i].rotation.y = _clock * 0.6 + float(i) * 2.3
+		_beam_pivots[i].rotation.y = _beam_spin + float(i) * 2.3
+	for mat: ShaderMaterial in _beam_mats:
+		mat.set_shader_parameter("strength", 0.13 * (1.0 + 3.0 * _beam_flare))
+	_update_events(delta)
 	for blinker: Dictionary in _blinkers:
 		var on: bool = fposmod(_clock + float(blinker["phase"]), BLINK_PERIOD) < 0.45
 		(blinker["mat"] as StandardMaterial3D).emission_energy_multiplier = 9.0 if on else 0.4
@@ -259,6 +297,408 @@ func _process(delta: float) -> void:
 		var erupting: bool = fposmod(_clock + float(geyser["offset"]), GEYSER_PERIOD) < GEYSER_BURST
 		if plume.emitting != erupting:
 			plume.emitting = erupting
+
+
+# ---------------------------------------------------------------- answering the player
+
+## Curtains of aurora: a long vertical ribbon far out over the sea and the ice, its rays drifting and
+## its hem waving. Brightest at its lower edge, green turning violet above; the sky straight over the
+## road's far end is left clear.
+const AURORA_SHADER := """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, shadows_disabled, fog_disabled;
+uniform float strength = 0.0;
+void vertex() {
+	float t = TIME * 0.12;
+	VERTEX.z += sin(UV.x * 17.0 + t * 3.0) * 28.0 + sin(UV.x * 6.0 - t * 2.0) * 45.0;
+	VERTEX.y += sin(UV.x * 11.0 + t * 1.7) * 9.0;
+}
+void fragment() {
+	float x = UV.x;
+	float h = 1.0 - UV.y;
+	float rays = 0.45 + 0.55 * sin(x * 150.0 + TIME * 0.7 + sin(x * 33.0 + TIME * 0.25) * 3.0);
+	float hem = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(0.25, 1.0, h));
+	float drift = 0.55 + 0.45 * sin(x * 8.0 - TIME * 0.35);
+	float clear = smoothstep(0.05, 0.17, abs(x - 0.5));
+	vec3 col = mix(vec3(0.2, 1.0, 0.55), vec3(0.6, 0.3, 1.0), smoothstep(0.3, 0.85, h));
+	ALBEDO = col * rays * hem * drift * clear * strength;
+}
+"""
+## The ice crack: a glowing fracture that runs out along its length (reveal) and fades.
+const CRACK_SHADER := """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, shadows_disabled;
+uniform float reveal = 0.0;
+uniform float glow = 0.0;
+void fragment() {
+	float edge = 1.0 - abs(UV.y - 0.5) * 2.0;
+	ALBEDO = vec3(0.55, 0.9, 1.0) * glow * step(UV.x, reveal) * (0.4 + 0.6 * edge);
+}
+"""
+## The foam ring a calving spire throws up: a ring spreading over the water and fading.
+const RING_SHADER := """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, shadows_disabled, fog_disabled;
+uniform float ring = 0.1;
+uniform float fade = 0.0;
+void fragment() {
+	float r = length(UV - vec2(0.5)) * 2.0;
+	float band = smoothstep(ring - 0.12, ring, r) * (1.0 - smoothstep(ring, ring + 0.05, r));
+	ALBEDO = vec3(0.6, 0.85, 0.9) * band * fade;
+}
+"""
+
+
+func on_milestone(level: int) -> void:
+	_beam_flare = maxf(_beam_flare, 1.0)
+	_aurora_boost = maxf(_aurora_boost, 0.5 + 0.1 * float(mini(level, 5)))
+	_erupt_vents(mini(2 + level, EVENT_VENTS), 0.35)
+	event_sound("geysers", -11.0)
+	if level >= 2:
+		_start_calving(level)
+		event_sound("calve", -9.0)
+	super(level)
+
+
+func on_streak(strength: float) -> void:
+	_beam_flare = maxf(_beam_flare, 0.5 + 0.5 * strength)
+	_erupt_vents(1, 0.0)
+	super(strength * 0.5)
+
+
+func on_burst(strength: float, kind: String) -> void:
+	_beam_flare = maxf(_beam_flare, 0.4 * strength)
+	_erupt_vents(1, 0.0)
+	super(strength, kind)
+
+
+func on_falter(severity: float) -> void:
+	_target_fog = maxf(_target_fog, severity)
+	_crack_age = 0.0
+	event_sound("crack", -11.0)
+	# A new crack each time: another jag pattern, just ahead on the ice.
+	_crack.mesh = _crack_mesh(_fx.randi())
+	_crack.position = Vector3(-(road_half + 4.0), 0.06, -38.0)
+	if not calm():
+		_shards.restart()
+
+
+func on_recover() -> void:
+	_target_fog = 0.0
+	super()
+
+
+func on_settle() -> void:
+	_target_fog = 0.0
+	_fog = 0.0
+	_beam_flare = 0.0
+	_aurora_boost = 0.0
+	_crack_age = -1.0
+	_crack.visible = false
+	for vent: Dictionary in _vents:
+		vent["at"] = -1.0
+		(vent["plume"] as CPUParticles3D).restart()
+		(vent["plume"] as CPUParticles3D).emitting = false
+	for bank: CPUParticles3D in _mist:
+		bank.restart()
+		bank.emitting = false
+	(_calve["spray"] as CPUParticles3D).restart()
+	(_calve["spray"] as CPUParticles3D).emitting = false
+	_end_calving()
+
+
+func _build_events() -> void:
+	_fx.seed = 3303
+	_base_fog = _world_env.fog_density
+	_base_haze = _world_env.volumetric_fog_density
+	# Event geysers: a line of vents across the ice on the left, carried down the road from where a
+	# milestone puts them. Pale steam, kept clear of the fog so it reads against the night.
+	_vent_field = Node3D.new()
+	add_child(_vent_field)
+	var grow := Curve.new()
+	grow.max_value = 5.0
+	grow.add_point(Vector2(0.0, 0.6))
+	grow.add_point(Vector2(1.0, 4.2))
+	for i: int in EVENT_VENTS:
+		var node := Node3D.new()
+		node.position = Vector3(-(road_half + 16.0 + 7.0 * float(i % 3)), 0.0, -32.0 * float(i))
+		_vent_field.add_child(node)
+		# Faint and many, as the shore's own geysers: fewer, denser puffs read as cotton balls.
+		var plume := fx_particles(fx_material("smoke", 1.0, false), 170, 3.4, 3.6, fx_ramp([
+			[0.0, Color(0.9, 0.97, 1.0, 0.0)], [0.08, Color(0.86, 0.95, 1.0, 0.3)], [0.5, Color(0.7, 0.85, 0.95, 0.16)],
+			[1.0, Color(0.6, 0.78, 0.9, 0.0)]]))
+		plume.local_coords = true  # rides with its vent
+		plume.direction = Vector3.UP
+		plume.spread = 9.0
+		plume.initial_velocity_min = 14.0
+		plume.initial_velocity_max = 24.0
+		plume.gravity = Vector3(0.0, -5.0, 0.0)
+		plume.damping_min = 1.5
+		plume.damping_max = 2.5
+		plume.scale_amount_curve = grow
+		plume.position.y = 0.5
+		node.add_child(plume)
+		var glow := fx_sprite(Color(0.55, 0.85, 1.0, 0.0), 4.0, 1.6, false)
+		glow.position.y = 1.0
+		node.add_child(glow)
+		_vents.append({"node": node, "plume": plume, "glow": glow, "at": -1.0, "until": 0.0})
+	# The aurora, far out ahead.
+	var curtain := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.orientation = PlaneMesh.FACE_Z
+	plane.size = Vector2(1300.0, 135.0)
+	plane.subdivide_width = 96
+	plane.subdivide_depth = 2
+	curtain.mesh = plane
+	_aurora = ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = AURORA_SHADER
+	_aurora.shader = shader
+	curtain.material_override = _aurora
+	curtain.position = Vector3(0.0, 100.0, -720.0)
+	curtain.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	curtain.visible = false
+	curtain.set_meta("no_weathering", true)
+	add_child(curtain)
+	_aurora.set_meta("node", curtain)
+	# Fog banks rolling in low over the sea and the ice (never over the road), and the ice crack.
+	for side: float in [-1.0, 1.0]:
+		var bank := fx_particles(fx_material("smoke", 1.0), 80, 8.0, 21.0, fx_ramp([
+			[0.0, Color(0.5, 0.6, 0.66, 0.0)], [0.25, Color(0.5, 0.6, 0.66, 0.45)], [0.75, Color(0.45, 0.55, 0.62, 0.4)],
+			[1.0, Color(0.42, 0.52, 0.6, 0.0)]]))
+		bank.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+		bank.emission_box_extents = Vector3(11.0, 1.5, 70.0)
+		bank.position = Vector3(side * (road_half + 17.0), 2.0 if side < 0.0 else SEA_LEVEL + 2.5, -95.0)
+		bank.spread = 4.0
+		add_child(bank)
+		_mist.append(bank)
+	_crack = MeshInstance3D.new()
+	_crack_mat = ShaderMaterial.new()
+	var crack_shader := Shader.new()
+	crack_shader.code = CRACK_SHADER
+	_crack_mat.shader = crack_shader
+	_crack.material_override = _crack_mat
+	_crack.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_crack.visible = false
+	_crack.set_meta("no_weathering", true)
+	add_child(_crack)
+	ride(_crack)
+	_shards = fx_particles(fx_material("glow", 3.0), 70, 1.6, 0.3, fx_ramp([
+		[0.0, Color(0.85, 0.97, 1.0, 1.0)], [1.0, Color(0.5, 0.8, 1.0, 0.0)]]))
+	_shards.local_coords = true
+	_shards.one_shot = true
+	_shards.explosiveness = 0.7
+	_shards.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	_shards.emission_box_extents = Vector3(12.0, 0.2, 6.0)
+	_shards.position = Vector3(-14.0, 0.2, -6.0)
+	_shards.direction = Vector3.UP
+	_shards.spread = 40.0
+	_shards.initial_velocity_min = 3.0
+	_shards.initial_velocity_max = 8.0
+	_shards.gravity = Vector3(0.0, -12.0, 0.0)
+	_crack.add_child(_shards)
+	_build_calving()
+
+
+## A jagged fracture about 30 long on the ice, running out from the road's edge, as a flat strip
+## whose UV.x runs along it (so the shader can reveal it from the road outward).
+func _crack_mesh(pattern: int) -> ArrayMesh:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = pattern
+	var points: Array[Vector3] = [Vector3.ZERO]
+	var heading: float = rng.randf_range(-0.5, -0.2)  # out from the road and a little ahead
+	for i: int in 12:
+		heading += rng.randf_range(-0.5, 0.5)
+		heading = clampf(heading, -1.1, 0.3)
+		points.append(points[points.size() - 1] + Vector3(-cos(heading), 0.0, sin(heading)) * rng.randf_range(2.0, 3.2))
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	for i: int in points.size():
+		var along: Vector3 = (points[mini(i + 1, points.size() - 1)] - points[maxi(i - 1, 0)]).normalized()
+		# Wide where it starts by the road and tapering out: seen at a glancing angle, a thin line vanishes.
+		var across := Vector3(-along.z, 0.0, along.x) * (0.75 * (1.0 - float(i) / float(points.size())) + 0.12)
+		verts.append(points[i] + across)
+		verts.append(points[i] - across)
+		uvs.append(Vector2(float(i) / float(points.size() - 1), 0.0))
+		uvs.append(Vector2(float(i) / float(points.size() - 1), 1.0))
+	var indices := PackedInt32Array()
+	for i: int in points.size() - 1:
+		indices.append_array([i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2])
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+## Sets `count` of the event geysers off one after another, `gap` seconds apart, from a line placed
+## ahead on the ice (it rides past from there).
+func _erupt_vents(count: int, gap: float) -> void:
+	var busy: bool = false
+	for vent: Dictionary in _vents:
+		if _clock < float(vent["until"]):
+			busy = true
+	if not busy:
+		_vent_field.position.z = -70.0
+		ride(_vent_field)
+	var started: int = 0
+	for i: int in _vents.size():
+		var vent: Dictionary = _vents[i]
+		if started >= count:
+			break
+		if _clock < float(vent["until"]):
+			continue
+		vent["at"] = _clock + gap * float(started)
+		vent["until"] = float(vent["at"]) + 1.8
+		started += 1
+
+
+## Out in the sea ahead and to the right: a tabular berg with an ice spire beside it that topples
+## into the water (from 0.8 s), sinks, and throws up spray and a ring of foam (from about 2 s).
+func _build_calving() -> void:
+	var root := Node3D.new()
+	root.visible = false
+	add_child(root)
+	var berg: Node3D = (load(asset("models/iceberg_b.glb")) as PackedScene).instantiate()
+	berg.scale = Vector3(1.5, 1.9, 1.5)
+	berg.position.x = 9.0
+	root.add_child(berg)
+	var pivot := Node3D.new()
+	pivot.position = Vector3(-4.0, 0.0, 0.0)
+	root.add_child(pivot)
+	var spire: Node3D = (load(asset("models/iceberg_a.glb")) as PackedScene).instantiate()
+	spire.scale = Vector3.ONE * 1.05
+	spire.position.x = 5.0
+	pivot.add_child(spire)
+	var spray := fx_particles(fx_material("smoke", 1.0, false), 200, 2.8, 5.0, fx_ramp([
+		[0.0, Color(0.95, 1.0, 1.0, 0.0)], [0.06, Color(0.92, 0.98, 1.0, 0.38)], [1.0, Color(0.7, 0.85, 0.95, 0.0)]]))
+	spray.local_coords = true
+	spray.one_shot = true
+	spray.explosiveness = 0.75
+	spray.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	spray.emission_box_extents = Vector3(9.0, 0.5, 5.0)
+	spray.position = Vector3(-14.0, 0.5, 0.0)
+	spray.direction = Vector3.UP
+	spray.spread = 35.0
+	spray.initial_velocity_min = 10.0
+	spray.initial_velocity_max = 21.0
+	spray.gravity = Vector3(0.0, -13.0, 0.0)
+	var grow := Curve.new()
+	grow.max_value = 4.0
+	grow.add_point(Vector2(0.0, 0.7))
+	grow.add_point(Vector2(1.0, 3.0))
+	spray.scale_amount_curve = grow
+	root.add_child(spray)
+	var ring := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(70.0, 70.0)
+	ring.mesh = plane
+	var ring_mat := ShaderMaterial.new()
+	var ring_shader := Shader.new()
+	ring_shader.code = RING_SHADER
+	ring_mat.shader = ring_shader
+	ring.material_override = ring_mat
+	ring.position = Vector3(-14.0, 0.15, 0.0)
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(ring)
+	# A cold light on the ice as it goes, so the falling spire reads against the dark bergs behind it.
+	var lamp := OmniLight3D.new()
+	lamp.light_color = Color(0.75, 0.92, 1.0)
+	lamp.omni_range = 45.0
+	lamp.light_energy = 0.0
+	lamp.position = Vector3(-14.0, 14.0, 10.0)
+	root.add_child(lamp)
+	_calve = {"root": root, "pivot": pivot, "spray": spray, "ring": ring_mat, "lamp": lamp, "age": -1.0, "splashed": false}
+
+
+## Puts the calving berg out in the sea ahead (built once, in build(), so the ice is weathered like
+## the rest) and starts it; one at a time.
+func _start_calving(_level: int) -> void:
+	if float(_calve["age"]) >= 0.0:
+		return
+	var root: Node3D = _calve["root"]
+	root.position = Vector3(road_half + 30.0, SEA_LEVEL, -125.0)
+	root.visible = true
+	var pivot: Node3D = _calve["pivot"]
+	pivot.rotation = Vector3.ZERO
+	pivot.position.y = 0.0
+	ride(root)
+	_calve["age"] = 0.0
+	_calve["splashed"] = false
+
+
+func _end_calving() -> void:
+	var root: Node3D = _calve["root"]
+	unride(root)
+	root.visible = false
+	(_calve["ring"] as ShaderMaterial).set_shader_parameter("fade", 0.0)
+	_calve["age"] = -1.0
+
+
+## The geysers, the calving, the aurora, the fog and the crack.
+func _update_events(delta: float) -> void:
+	var any_vent: bool = false
+	for vent: Dictionary in _vents:
+		var at: float = vent["at"]
+		var on: bool = at >= 0.0 and _clock >= at and _clock < at + 1.6
+		var plume: CPUParticles3D = vent["plume"]
+		if plume.emitting != on:
+			plume.emitting = on
+		var glow: float = clampf(1.0 - absf(_clock - at - 0.6) / 1.2, 0.0, 1.0) if at >= 0.0 else 0.0
+		((vent["glow"] as MeshInstance3D).material_override as ShaderMaterial).set_shader_parameter(
+			"tint", Color(0.55, 0.85, 1.0, glow))
+		any_vent = any_vent or _clock < float(vent["until"]) + 3.5
+	if not any_vent:
+		unride(_vent_field)
+	if float(_calve["age"]) >= 0.0:
+		_calve["age"] = float(_calve["age"]) + delta
+		var a: float = _calve["age"]
+		var pivot: Node3D = _calve["pivot"]
+		# It leans, then falls faster and faster, and once down it sinks out of sight.
+		var fall: float = clampf((a - 0.8) / 1.3, 0.0, 1.0)
+		pivot.rotation.z = deg_to_rad(98.0) * fall * fall
+		pivot.position.y = -16.0 * clampf((a - 2.2) / 3.0, 0.0, 1.0)
+		if a >= 2.0 and not bool(_calve["splashed"]):
+			_calve["splashed"] = true
+			(_calve["spray"] as CPUParticles3D).restart()
+			flash(Color(0.8, 0.95, 1.0), 0.35, 15.0)
+		(_calve["lamp"] as OmniLight3D).light_energy = 4.0 * clampf(a / 0.6, 0.0, 1.0) * clampf((7.0 - a) / 3.0, 0.0, 1.0)
+		var ring_mat: ShaderMaterial = _calve["ring"]
+		var r: float = clampf((a - 2.0) / 3.5, 0.0, 1.0)
+		ring_mat.set_shader_parameter("ring", 0.1 + 0.85 * r)
+		ring_mat.set_shader_parameter("fade", (1.0 - r) * 2.0 if a >= 2.0 else 0.0)
+		if (_calve["root"] as Node3D).position.z > 80.0 or a > 16.0:
+			_end_calving()
+	# The aurora comes up with a long combo (and a milestone flares it for a while).
+	_aurora_boost = maxf(_aurora_boost - delta * 0.06, 0.0)
+	var aurora: float = clampf(1.1 * flow() + _aurora_boost, 0.0, 1.4)
+	(_aurora.get_meta("node") as Node3D).visible = aurora > 0.01
+	_aurora.set_shader_parameter("strength", aurora)
+	# Fog rolls in slowly and lifts slowly; the notes are kept readable (the depth fog only thickens
+	# by half), and the banks of mist stay off the road.
+	_fog = move_toward(_fog, _target_fog, delta * (0.25 if _target_fog > _fog else 0.2))
+	_world_env.fog_density = _base_fog * (1.0 + 0.5 * _fog)
+	if Settings.high_graphics:
+		_world_env.volumetric_fog_density = _base_haze + 0.006 * _fog
+	var along: float = (Highway.LENGTH / Highway.lookahead) * _speed * (1.0 + HEAT_SPEED * _heat)
+	for bank: CPUParticles3D in _mist:
+		bank.emitting = _fog > 0.15
+		# Mist hangs in the air: it comes past with the ground.
+		bank.direction = Vector3(0.0, 0.0, 1.0)
+		bank.initial_velocity_min = along
+		bank.initial_velocity_max = along
+	if _crack_age >= 0.0:
+		_crack_age += delta
+		_crack.visible = true
+		_crack_mat.set_shader_parameter("reveal", clampf(_crack_age / (1.6 if calm() else 0.5), 0.0, 1.0))
+		var hold: float = 6.0 if faltering() else 2.0
+		_crack_mat.set_shader_parameter("glow", 2.4 * clampf(1.0 - (_crack_age - hold) / 3.0, 0.0, 1.0))
+		if _crack_age > hold + 3.0 or _crack.position.z > 30.0:
+			_crack_age = -1.0
+			_crack.visible = false
 
 
 func _make_sea() -> void:
@@ -303,6 +743,7 @@ func _make_beam(tower: Node3D, phase: float) -> void:
 	shader.code = BEAM_SHADER
 	mat.shader = shader
 	mat.set_shader_parameter("half_length", BEAM_LENGTH * 0.5)
+	_beam_mats.append(mat)
 	var cone := CylinderMesh.new()
 	cone.top_radius = 0.4  # +Y end, at the lamp
 	cone.bottom_radius = 7.0

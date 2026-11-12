@@ -22,6 +22,7 @@ at the right region; only names and looks changed in the sci-fi rework (2026-11-
 | `tools/themes/<id>/props.py` | Blender, via `tools/blender/propkit.py` | `game/assets/themes/<id>/models/*.glb` |
 | `tools/themes/<id>/textures.py` | GIMP, via `tools/gimp/paintkit.py` | `game/assets/themes/<id>/textures/` (`sky.png`, road and ground tiles, `region_logo.png`) |
 | `tools/themes/<id>/ambience.scd` | SuperCollider | `game/assets/themes/<id>/audio/ambience.wav` (looped) |
+| `tools/themes/<id>/events.scd` | SuperCollider (`sclang events.scd <audio dir>`) | `game/assets/themes/<id>/audio/event_*.wav` (the world's answers to the player) |
 | `tools/song/songs/<song>.py` | `tools/song/songlib.py` | `game/data/songs/<song>.json` and `game/assets/songs/<song>/{backing,lead}.wav` |
 | `tools/song/synths/<id>.scd` (optional) | SuperCollider | extra instruments, appended to `~defs` |
 | `game/scripts/themes/<id>.gd` | `extends ThemeWorld` | the 3D world |
@@ -79,6 +80,25 @@ the same heavy stack from ThemeWorld, so a region only tunes it:
   keep it clean (the hood is).
 - Frame rate comes first: timing reads input once a frame. Measure with `godot_performance` after a
   change, and keep shadow casters lean (no shadows on headlights; tiny scatter casts are fine).
+
+### Answering the player (2026-11-11)
+
+The world reacts to how the run is going (Evan's playtest: "environmental responses"). `PlaySession`
+reads the judge's results (never timing or scoring) and calls the world; override the `on_*` hooks in
+`theme_world.gd` (each default throws a swell of light, `flash()`; call `super()` to keep it):
+
+- `on_milestone(level)`: combo 25, 50, 100, then every 100 (level 1, 2, 3, 4...); each bigger.
+- `on_streak(strength)`: eight quick hits in a row (the gap widens for slow songs); back to back, stronger.
+- `on_burst(strength, kind)`: a hold of 1.5 s or more carried home (`"hold"`), a power chord struck whole (`"power"`).
+- `on_falter(severity)`: a combo of 20+ broken, three misses in a row, the tank under 30%. Things go wrong
+  until `on_recover()` (combo 12 again, tank back over 45%): put them right, so a run never looks wrecked.
+- `flow()`: a long combo past full heat, 0 to 1. `on_settle()`: back to rest at once (a new run).
+
+Spectacles go ahead or to the sides, never over the note lanes or the keys, and must still read when a
+near landmark passes in front. With `calm()` (motion off) play calm versions: no flashes, strobes or
+shakes. Build effects with the `fx_*` helpers (billboard particles, beams, sprites: no shadows, kept out
+of weathering; `fogged = false` for far-off ones), `ride()` an effect placed ahead so the drive carries it
+past, and `event_sound(name)` plays `audio/event_<name>.wav`, rendered from `tools/themes/<id>/events.scd`.
 
 ## Props (`props.py`)
 

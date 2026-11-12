@@ -38,7 +38,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_load(s)
 	_windshield(s, m)
 	if not (m["song"] as Dictionary).is_empty():
-		for i: int in 2:
+		for i: int in mini((m["cards"] as Array).size(), CARDS.size()):
 			_plate(s, CARDS[i], m["cards"][i])
 		_practice(s, m)
 	_drive(s, m)
@@ -206,7 +206,12 @@ func _windshield(s: RouteScreen, m: Dictionary) -> void:
 	frame.draw(s.get_canvas_item(), outer)
 
 
+## A difficulty plate. Three share the zone two had, so the lines are short and the feel line
+## drops its second reason (or ellipsizes) to leave room for the best grade.
 func _plate(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
+	if not card.get("available", true):
+		_blank_plate(s, rect, card)
+		return
 	var on: bool = card["selected"]
 	var r: Rect2 = rect
 	if on:
@@ -215,15 +220,31 @@ func _plate(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
 	else:
 		hard_shadow(s, r, Vector2(5, 5), EDGE, 6.0)
 	box(s, r, AMBER if on else CREAM, EDGE, 3.0, 6.0)
-	var x: float = r.position.x + 18.0
-	var w: float = r.size.x - 36.0
-	text(s, Rect2(x, r.position.y + 12, w, 28), str(card["name"]), font("Alfa Slab One"), 22, INK)
-	text(s, Rect2(x, r.position.y + 12, w, 28), "Lv %d" % int(card["level"]), font("Alfa Slab One"), 22, INK, HORIZONTAL_ALIGNMENT_RIGHT)
+	# 20 px slab on a 207 px plate: at the design's 22, "NORMAL" ran into "Lv 8".
+	var x: float = r.position.x + 16.0
+	var w: float = r.size.x - 32.0
+	text(s, Rect2(x, r.position.y + 12, w, 28), str(card["name"]), font("Alfa Slab One"), 20, INK)
+	text(s, Rect2(x, r.position.y + 12, w, 28), "Lv %d" % int(card["level"]), font("Alfa Slab One"), 20, INK, HORIZONTAL_ALIGNMENT_RIGHT)
 	text(s, Rect2(x, r.position.y + 46, w, 22), str(card["counts"]), font("Oswald", 500), 15, INK)
 	text(s, Rect2(x, r.position.y + 70, w, 20), str(card["keys"]), font("Oswald"), 14, INK if on else Color("#5A4636"))
-	text(s, Rect2(x, r.position.y + 92, w, 20), str(card["feel"]), font("Oswald", 600), 14, INK if on else RUST)
+	var feel_w: float = w
 	if not str(card["best"]).is_empty():
-		text(s, Rect2(x, r.position.y + 92, w, 20), "BEST " + str(card["best"]), font("Oswald", 600, 1.0), 13, INK, HORIZONTAL_ALIGNMENT_RIGHT)
+		var best_font: Font = font("Oswald", 600, 1.0)
+		text(s, Rect2(x, r.position.y + 92, w, 20), "BEST " + str(card["best"]), best_font, 13, INK, HORIZONTAL_ALIGNMENT_RIGHT)
+		feel_w -= text_width("BEST " + str(card["best"]), best_font, 13) + 10.0
+	var feel_font: Font = font("Oswald", 600)
+	text(s, Rect2(x, r.position.y + 92, feel_w, 20), fit_list(str(card["feel"]), feel_font, 14, feel_w), feel_font, 14,
+			INK if on else RUST)
+
+
+## A level the song has no chart for yet: an empty slot in the dash, flat and dashed, no level.
+func _blank_plate(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
+	box(s, rect, Color("#3A2219"), EDGE, 3.0, 6.0)
+	dashed_box(s, rect.grow(-6.0), Color("#6A4A3A"), 2.0, 6.0, 4.0)
+	var x: float = rect.position.x + 16.0
+	var w: float = rect.size.x - 32.0
+	text(s, Rect2(x, rect.position.y + 12, w, 28), str(card["name"]), font("Alfa Slab One"), 20, Color("#8A6A56"))
+	text(s, Rect2(x, rect.position.y + 50, w, 22), "not charted yet", font("Oswald", 500), 15, DUST)
 
 
 func _practice(s: RouteScreen, m: Dictionary) -> void:

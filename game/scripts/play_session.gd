@@ -13,6 +13,13 @@ extends Node
 ## and the hit line, the combo heats the scenery up, a miss jolts the camera, and
 ## combo milestones are called out. And it keeps what the results screen teaches
 ## from: how early or late each hit was, and which keys were missed.
+##
+## It also tells the world how the run is going, so the scenery can answer (Evan's playtest,
+## 2026-11-11): combo milestones (25, 50, 100, then every 100), fast streaks (STREAK_RUN
+## quick hits in a row), long holds carried home and power chords struck whole, faltering (a combo of
+## FALTER_COMBO or more broken, MISS_RUN misses in a row, the tank running low), recovering after
+## it, and flow (a long combo held past full heat). This only reads the judge's results: it never
+## touches timing or scoring.
 
 signal finished(result: Dictionary)
 signal quit_to_menu
@@ -26,7 +33,27 @@ const FAIL_WAIT := 2.8
 const STEP := 1.0 / 240.0
 ## A full-heat world at this combo; the same number the score multiplier tops out at.
 const HEAT_COMBO := 50.0
+## Called out once each, the first time the combo reaches it; past the last, one every 100.
 const MILESTONES: Array[int] = [25, 50, 100, 200, 300, 400, 500]
+## A fast streak: this many hits in a row averaging at most the chart's streak gap apart (STREAK_GAP,
+## widened for a slow song up to STREAK_GAP_MAX so its densest passages still count).
+const STREAK_RUN := 8
+const STREAK_GAP := 0.25
+const STREAK_GAP_MAX := 0.5
+## Notes this close together are one chord: one onset for the streak (Chart.CHORD_SECONDS).
+const CHORD_GAP := 0.03
+## A hold this long or longer, carried to its end, is worth a burst in the world.
+const LONG_HOLD := 1.5
+## Faltering: a combo of at least this many broken, this many misses in a row, or the tank under
+## LOW_FUEL (where the gauge turns red). Recovering: a combo of RECOVER_COMBO with the tank back
+## over FUEL_RECOVERED.
+const FALTER_COMBO := 20
+const MISS_RUN := 3
+const LOW_FUEL := 0.3
+const FUEL_RECOVERED := 0.45
+const RECOVER_COMBO := 12
+## Flow rises from full heat (HEAT_COMBO) to 1 over this many more notes.
+const FLOW_SPAN := 100.0
 
 var chart: Chart
 var judge: Judge
@@ -80,6 +107,19 @@ var _offsets: Array[float] = []
 ## Lane -> notes missed or holds dropped there.
 var _trouble: Dictionary = {}
 var _progress_at_end: float = 1.0
+# Reading the run for the world (never for scoring).
+var _streak_gap: float = STREAK_GAP
+var _last_onset: float = -INF
+var _onsets: Array[float] = []
+var _streak_wait: int = 0
+var _streak_level: int = 0
+var _last_combo: int = 0
+var _miss_run: int = 0
+var _fuel_low: bool = false
+var _faltering: bool = false
+## Power note -> its chord (the notes struck together), and the chord's first note -> hits so far.
+var _chord_of: Dictionary = {}
+var _chord_hits: Dictionary = {}
 
 const HANDS_TEXT := "Hands on the home row:  A S D F      J K L ;"
 
@@ -94,6 +134,10 @@ func begin(song: Chart, highway: Highway, world: ThemeWorld, sfx: Dictionary, op
 	_practice = options.get("practice", false)
 	_speed = float(options.get("speed", 1.0)) if _practice else 1.0
 	_first_note_time = chart.notes[0].t
+	# The world may still show the last run's effects (it is kept between runs in one region).
+	_world.settle()
+	_streak_gap = _streak_gap_for(chart)
+	_find_power_chords()
 	judge = Judge.new(chart)
 	judge.no_fail = _practice
 	judge.note_hit.connect(_on_note_hit)
@@ -137,6 +181,9 @@ func _exit_tree() -> void:
 	# The pitch correction is on a shared bus; never leave it on for the next run.
 	if clock != null and not clock.manual:
 		Settings.set_practice_speed(1.0)
+	# Leaving the run: the world behind the menus goes back to rest.
+	if is_instance_valid(_world):
+		_world.settle()
 
 
 func _process(delta: float) -> void:
@@ -223,6 +270,7 @@ func _step(delta: float) -> void:
 	_world.set_target_speed(0.74 + 0.26 * clampf(judge.fuel / 0.5, 0.0, 1.0))
 	_world.set_headlight_level(judge.fuel / 0.4)
 	_world.set_heat(float(judge.combo) / HEAT_COMBO)
+	_read_the_run()
 	_tick_beat(now)
 	_tick_milestone()
 	_update_hud(now)
@@ -244,13 +292,15 @@ func _tick_beat(now: float) -> void:
 		_highway.pulse(strength)
 
 
-## Calls out a combo milestone once, the first time the combo reaches it.
+## Calls out a combo milestone once, the first time the combo reaches it, and sets the world off:
+## level 1 at 25, 2 at 50, 3 at 100, then one more for every 100.
 func _tick_milestone() -> void:
-	if _next_milestone >= MILESTONES.size() or judge.combo < MILESTONES[_next_milestone]:
+	if judge.combo < _milestone_combo(_next_milestone):
 		return
-	var reached: int = MILESTONES[_next_milestone]
+	var reached: int = _milestone_combo(_next_milestone)
 	_next_milestone += 1
 	_world.beat(1.6)
+	_world.milestone(_next_milestone)
 	_play(_sfx, "milestone")
 	if clock.manual:
 		return
@@ -262,6 +312,118 @@ func _tick_milestone() -> void:
 	_milestone_label.modulate.a = 1.0
 	tween.tween_property(_milestone_label, "scale", Vector2.ONE, 0.18)
 	tween.tween_property(_milestone_label, "modulate:a", 0.0, 0.5).set_delay(0.9)
+
+
+func _milestone_combo(index: int) -> int:
+	if index < MILESTONES.size():
+		return MILESTONES[index]
+	return MILESTONES[MILESTONES.size() - 1] + 100 * (index - MILESTONES.size() + 1)
+
+
+# ---------------------------------------------------------------- reading the run for the world
+
+## Faltering, recovering and flow, from the judge's state after this frame's notes.
+func _read_the_run() -> void:
+	# A big combo broken (a miss or a wrong key; a dropped hold keeps the combo).
+	if judge.combo < _last_combo and _last_combo >= FALTER_COMBO:
+		_falter(clampf(float(_last_combo) / 100.0, 0.45, 1.0))
+	_last_combo = judge.combo
+	# The tank running low (never in practice, where it does not drain).
+	if not _fuel_low and judge.fuel < LOW_FUEL:
+		_fuel_low = true
+		_falter(1.0)
+	elif _fuel_low and judge.fuel > FUEL_RECOVERED:
+		_fuel_low = false
+	if _faltering and judge.combo >= RECOVER_COMBO and not _fuel_low:
+		_faltering = false
+		_world.recover()
+	_world.set_flow(clampf(float(judge.combo - int(HEAT_COMBO)) / FLOW_SPAN, 0.0, 1.0))
+
+
+func _falter(severity: float) -> void:
+	_faltering = true
+	_world.falter(severity)
+
+
+## A quick hit extends the run. Whenever the last STREAK_RUN onsets (consecutive hits, a chord counting
+## once) came at an average of at most the streak gap apart, the world hears of a streak; then it waits
+## for STREAK_RUN more hits before the next. Streaks back to back grow stronger.
+func _track_streak(n: Chart.Note) -> void:
+	if n.t - _last_onset <= CHORD_GAP:
+		return  # the rest of a chord (or a late key of one): one onset
+	_last_onset = n.t
+	_onsets.append(n.t)
+	if _onsets.size() > STREAK_RUN:
+		_onsets.pop_front()
+	_streak_wait = maxi(_streak_wait - 1, 0)
+	if _onsets.size() < STREAK_RUN:
+		return
+	if not _dense(_onsets, _streak_gap):
+		_streak_level = 0
+	elif _streak_wait == 0:
+		_streak_wait = STREAK_RUN
+		_streak_level += 1
+		_world.streak(clampf(0.15 + 0.25 * float(_streak_level), 0.4, 1.0))
+
+
+func _break_streak() -> void:
+	_onsets.clear()
+	_streak_level = 0
+	_streak_wait = 0
+
+
+static func _dense(onsets: Array[float], gap: float) -> bool:
+	return onsets[onsets.size() - 1] - onsets[0] <= float(STREAK_RUN - 1) * gap
+
+
+## The gap between quick hits for this chart: STREAK_GAP, or wider for a slow song, until a perfect
+## run would set off at least three streaks (a slow song's busiest moments are still its fast ones).
+static func _streak_gap_for(song: Chart) -> float:
+	var onsets: Array[float] = []
+	for n: Chart.Note in song.notes:
+		if onsets.is_empty() or n.t - onsets[onsets.size() - 1] > CHORD_GAP:
+			onsets.append(n.t)
+	var gap: float = STREAK_GAP
+	while gap < STREAK_GAP_MAX:
+		var streaks: int = 0
+		var wait: int = 0
+		for i: int in range(STREAK_RUN - 1, onsets.size()):
+			wait = maxi(wait - 1, 0)
+			if wait == 0 and onsets[i] - onsets[i - STREAK_RUN + 1] <= float(STREAK_RUN - 1) * gap:
+				streaks += 1
+				wait = STREAK_RUN
+		if streaks >= 3:
+			return gap
+		gap += 0.025
+	return STREAK_GAP_MAX
+
+
+## Groups the power notes (Hard: "pw" in the chart) struck together. Read with get(), so a chart
+## class without power notes simply has none.
+func _find_power_chords() -> void:
+	_chord_of.clear()
+	_chord_hits.clear()
+	var current: Array = []
+	for i: int in chart.notes.size() + 1:
+		var n: Chart.Note = chart.notes[i] if i < chart.notes.size() else null
+		var is_power: bool = n != null and n.get("power") == true
+		if not current.is_empty() and (not is_power or n.t - (current[0] as Chart.Note).t > CHORD_GAP):
+			if current.size() > 1:
+				for member: Chart.Note in current:
+					_chord_of[member] = current
+			current = []
+		if is_power:
+			current.append(n)
+
+
+func _track_power_chord(n: Chart.Note) -> void:
+	if not _chord_of.has(n):
+		return
+	var chord: Array = _chord_of[n]
+	var hits: int = int(_chord_hits.get(chord[0], 0)) + 1
+	_chord_hits[chord[0]] = hits
+	if hits == chord.size():
+		_world.burst(1.0, "power")
 
 
 ## The melody stem is the player's to keep alive. A hit opens it, and it stays open
@@ -346,6 +508,9 @@ func _show_count() -> void:
 
 func _on_note_hit(n: Chart.Note, verdict: String, offset: float) -> void:
 	_offsets.append(offset)
+	_miss_run = 0
+	_track_streak(n)
+	_track_power_chord(n)
 	_highway.celebrate(n.lane, verdict == "perfect")
 	_flash_judgement(verdict.to_upper(), Color(1.0, 0.93, 0.7) if verdict == "perfect" else Color(0.55, 0.95, 0.65))
 	if not n.is_hold:
@@ -354,6 +519,10 @@ func _on_note_hit(n: Chart.Note, verdict: String, offset: float) -> void:
 
 func _on_note_missed(n: Chart.Note) -> void:
 	_trouble[n.lane] = int(_trouble.get(n.lane, 0)) + 1
+	_break_streak()
+	_miss_run += 1
+	if _miss_run == MISS_RUN or _miss_run == MISS_RUN * 2:
+		_falter(0.6 if _miss_run == MISS_RUN else 0.85)
 	if _stage:
 		_stage.jolt(0.7)
 	_lead_open_until = minf(_lead_open_until, clock.now())
@@ -361,6 +530,7 @@ func _on_note_missed(n: Chart.Note) -> void:
 
 
 func _on_wrong_key(lane: int) -> void:
+	_break_streak()
 	_highway.flash_wrong(lane)
 	_play(_sfx, "wrong")
 
@@ -371,6 +541,8 @@ func _on_hold_ended(n: Chart.Note, completed: bool) -> void:
 		_highway.celebrate(n.lane, true)
 		_flash_judgement("HELD", Color(0.75, 0.97, 1.0))
 		_play(_sfx, "held")
+		if n.d >= LONG_HOLD:
+			_world.burst(clampf(n.d / 3.0, 0.5, 1.0), "hold")
 	else:
 		_trouble[n.lane] = int(_trouble.get(n.lane, 0)) + 1
 		_lead_open_until = minf(_lead_open_until, clock.now())
@@ -381,6 +553,7 @@ func _on_out_of_fuel() -> void:
 	_failed_at_usec = Time.get_ticks_usec()
 	_progress_at_end = clampf(clock.now() / maxf(chart.last_note_end(), 0.001), 0.0, 1.0)
 	_world.set_heat(0.0)
+	_world.set_flow(0.0)
 	_world.set_target_speed(0.0)
 	_world.set_headlight_level(0.0)
 	if clock.manual:
@@ -407,6 +580,9 @@ func _finish(failed: bool) -> void:
 	_held_keys.clear()
 	_hud.visible = false
 	_world.set_heat(0.0)
+	# The results screen sits over a calm world: whatever broke rights itself.
+	_world.set_flow(0.0)
+	_world.recover()
 	var sorted_offsets: Array[float] = _offsets.duplicate()
 	sorted_offsets.sort()
 	var trouble: Array = []

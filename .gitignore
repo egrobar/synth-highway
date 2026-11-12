@@ -37,3 +37,6 @@ game/assets/**/*.wav.import
 # stems are rebuilt from space-mmo, so only the charts (game/data/songs) are committed.
 game/assets/songs/**/*.ogg
 game/assets/songs/**/*.ogg.import
+
+# Suno stems for re-charting the built-in songs (large; kept out of git)
+sources/

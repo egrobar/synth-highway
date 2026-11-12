@@ -25,6 +25,8 @@ var _lead_in_remaining: float = 0.0
 var _paused_during_lead_in: bool = false
 var _frozen: float = 0.0
 var _last: float = -INF
+## When now() last ran while playing, so time can run on after the audio ends.
+var _wall_usec: int = 0
 
 
 func _init(backing: AudioStreamPlayer = null, lead: AudioStreamPlayer = null) -> void:
@@ -64,7 +66,16 @@ func now() -> float:
 			# Ends on exactly the value playback starts from, so nothing jumps at the handover.
 			t = -float(_lead_in_end_usec - Time.get_ticks_usec()) / 1000000.0 * speed - _total_latency()
 		Mode.PLAYING:
-			t = _backing.get_playback_position() + AudioServer.get_time_since_last_mix() * speed - _total_latency()
+			var wall: int = Time.get_ticks_usec()
+			if _backing.playing:
+				t = _backing.get_playback_position() + AudioServer.get_time_since_last_mix() * speed - _total_latency()
+			elif _last > -INF:
+				# The audio has run out, but the run ends PlaySession.END_TAIL after the last note,
+				# which can be later: with time stuck at the audio's end the run never finished
+				# (Vox Ex Profundis, last note ending 1.4 s before its audio did; 2026-11-11).
+				# Time runs on with the wall clock.
+				t = _last + float(wall - _wall_usec) / 1000000.0 * speed
+			_wall_usec = wall
 		Mode.PAUSED:
 			return _frozen
 	# Position updates arrive in mix-sized chunks. Time must never run backwards.
@@ -95,6 +106,7 @@ func resume() -> void:
 		mode = Mode.LEAD_IN
 	else:
 		_set_stream_paused(false)
+		_wall_usec = Time.get_ticks_usec()  # a pause after the audio ended must not jump time on
 		mode = Mode.PLAYING
 
 

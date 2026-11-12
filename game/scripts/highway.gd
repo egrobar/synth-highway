@@ -7,11 +7,20 @@ extends Node3D
 ## Ten equal lanes, A S D F G H J K L ;, the same for every song, so hands never
 ## move. F and J carry homing bumps like a real keyboard; G and H, the index-finger
 ## reaches, are tinted; a brighter line down the middle splits the two hands.
-## Sharps (Normal only) are orange notes riding between two lanes, played on the
+## Sharps (Normal and Hard) are orange notes riding between two lanes, played on the
 ## dark top-row keys set between the home keys like a piano's black keys.
 ##
 ## Home-row notes, their lanes and their keys are coloured by the finger that plays
 ## them (KeyMap.FINGER_COLORS), mirrored across the hands.
+##
+## Power chords (Hard: Chart.power_chords) must read at a glance as ONE event, two or three keys
+## struck together: a raised white bar joins the chord's notes across the lanes, each head stands
+## taller (in its own finger colour) on a white halo plate, and the halos and the bar shimmer
+## together (steady with Settings.motion off). White is the one colour no other cue uses: fingers
+## are violet, yellow, green, cyan and pink, sharps orange, a miss dark red, and the faint beat and
+## bar lines that also cross the road are flat, full-width and cream. Missing any note of a chord
+## greys its bar; hitting every note sets off a wide white flash, a ring and a fountain of sparks
+## across the chord, on top of each note's own burst.
 
 ## Seconds a note is visible before it reaches the hit line. A setting: see Settings.NOTE_SPEEDS.
 static var lookahead: float = 3.0
@@ -32,6 +41,14 @@ const COLOR_MISS := Color(0.62, 0.14, 0.18)  # dark red: never mistaken for the 
 const COLOR_HOT := Color(0.85, 0.98, 1.0)
 const COLOR_DEAD := Color(0.26, 0.28, 0.36)
 const COLOR_WRONG := Color(1.0, 0.25, 0.4)
+const COLOR_POWER := Color(0.96, 0.98, 1.0)
+## A power head's height over an ordinary head's, so the chord stands up off the road.
+const POWER_HEIGHT := 1.35
+## Emission of power heads (the same as ordinary heads, so the finger colour holds under the bloom),
+## their halo plates and the chord bar.
+const POWER_HEAD_GLOW := 1.5
+const POWER_AURA_GLOW := 0.9
+const POWER_BAR_GLOW := 2.0
 const KEY_REST := Color(0.945, 0.95, 0.98)
 const KEY_REACH := Color(0.66, 0.72, 0.86)
 
@@ -41,6 +58,8 @@ class NoteView:
 	var head: MeshInstance3D
 	var body: MeshInstance3D
 	var label: Label3D
+	## The white halo plate under a power note's head; hidden on ordinary notes.
+	var aura: MeshInstance3D
 	var note: Chart.Note
 
 
@@ -67,10 +86,32 @@ var _mat_hot: StandardMaterial3D
 var _mat_dead: StandardMaterial3D
 var _mat_beat: StandardMaterial3D
 var _mat_bar: StandardMaterial3D
+## Power chords: [{"t", "notes", "left", "right", "bar"}] in time order, the next one to show,
+## the ones on the road, and the pools and materials that draw them.
+var _chords: Array = []
+var _chord_spawn: int = 0
+var _chords_live: Array = []
+var _chord_bars: Array[MeshInstance3D] = []
+var _power_flashes: Array[Dictionary] = []
+var _power_sparks: Array[CPUParticles3D] = []
+var _next_power_spark: int = 0
+var _power_phase: float = 0.0
+var _mat_heads_power: Array[StandardMaterial3D] = []
+var _mat_sharp_power: StandardMaterial3D
+var _mat_aura: StandardMaterial3D
+var _mat_chord_bar: StandardMaterial3D
+var _mat_chord_dead: StandardMaterial3D
 
 
 func setup(chart: Chart) -> void:
 	_chart = chart
+	for notes: Array in chart.power_chords():
+		var left: float = INF
+		var right: float = -INF
+		for n: Chart.Note in notes:
+			left = minf(left, lane_x(n.lane))
+			right = maxf(right, lane_x(n.lane))
+		_chords.append({"t": (notes[0] as Chart.Note).t, "notes": notes, "left": left, "right": right, "bar": null})
 	_build_materials()
 	_build_keyboard()
 	_build_lane_guides()
@@ -121,6 +162,10 @@ func reset_run() -> void:
 		_release(view)
 	_active.clear()
 	_spawn_index = 0
+	for chord: Dictionary in _chords_live:
+		_drop_bar(chord)
+	_chords_live.clear()
+	_chord_spawn = 0
 	# A run can be restarted from pause with keys still down; start every run with them up.
 	for key: Dictionary in _keys.values():
 		key["pressed"] = 0
@@ -189,6 +234,7 @@ func update_view(now: float, delta: float, holding: bool) -> void:
 	if _line_mat:
 		_line_mat.emission_energy_multiplier = 2.6 + 4.0 * _pulse
 	_update_beat_lines(now, speed)
+	_update_chords(now, speed, delta)
 	_update_keys(now, delta)
 	_update_bursts(delta)
 
@@ -202,9 +248,12 @@ func _place(view: NoteView, now: float, speed: float) -> void:
 	view.root.position = Vector3(lane_x(n.lane), 0.0, 0.0)
 	view.head.visible = not hit
 	view.label.visible = show_letters and not hit and not missed
+	# A missed power note loses its halo, so the dark red of a miss reads the same as anywhere else.
+	view.aura.visible = n.power and not hit and not missed
 	if not hit:
 		view.head.position.z = z_head - HEAD_LENGTH * 0.5
-		view.head.material_override = _mat_miss if missed else (_mat_sharp if KeyMap.is_sharp(n.lane) else _mat_heads[KeyMap.finger_for(n.lane)])
+		view.aura.position.z = z_head - HEAD_LENGTH * 0.5
+		view.head.material_override = _mat_miss if missed else _head_material(n)
 		view.label.position.z = z_head - HEAD_LENGTH * 0.5
 	if not n.is_hold:
 		view.body.visible = false
@@ -233,6 +282,9 @@ func _acquire(n: Chart.Note) -> void:
 		view.head.mesh = _box
 		view.body = MeshInstance3D.new()
 		view.body.mesh = _box
+		view.aura = MeshInstance3D.new()
+		view.aura.mesh = _box
+		view.aura.material_override = _mat_aura
 		view.label = Label3D.new()
 		view.label.font_size = 110
 		view.label.pixel_size = 0.0095
@@ -241,6 +293,7 @@ func _acquire(n: Chart.Note) -> void:
 		# Tilted up toward the camera: lying flat, far-off letters foreshortened into slivers.
 		view.label.rotation_degrees = Vector3(-50, 0, 0)
 		view.label.shaded = false
+		view.root.add_child(view.aura)
 		view.root.add_child(view.head)
 		view.root.add_child(view.body)
 		view.root.add_child(view.label)
@@ -250,12 +303,17 @@ func _acquire(n: Chart.Note) -> void:
 		view = _pool.pop_back()
 	# Sharps are narrower, so a note on the line between two lanes never reads as either one.
 	var width: float = KEY_WIDTH * (0.5 if KeyMap.is_sharp(n.lane) else 0.84)
-	view.head.scale = Vector3(width, NOTE_HEIGHT, HEAD_LENGTH)
-	view.head.position.y = NOTE_HEIGHT * 0.5
+	var height: float = NOTE_HEIGHT * (POWER_HEIGHT if n.power else 1.0)
+	view.head.scale = Vector3(width, height, HEAD_LENGTH)
+	view.head.position.y = height * 0.5
+	# The halo: a flat white plate a little larger than the head, showing as a bright rim round it.
+	view.aura.scale = Vector3(width + 0.3, 0.05, HEAD_LENGTH + 0.3)
+	view.aura.position.y = 0.03
+	view.aura.visible = n.power
 	view.body.scale = Vector3(width * 0.46, 0.14, 1.0)
 	view.body.position.y = 0.09
 	view.label.text = KeyMap.label_for(n.lane)
-	view.label.position.y = NOTE_HEIGHT + 0.012
+	view.label.position.y = height + 0.012
 	view.note = n
 	view.root.visible = true
 	_active.append(view)
@@ -265,6 +323,114 @@ func _release(view: NoteView) -> void:
 	view.root.visible = false
 	view.note = null
 	_pool.append(view)
+
+
+func _head_material(n: Chart.Note) -> StandardMaterial3D:
+	if KeyMap.is_sharp(n.lane):
+		return _mat_sharp_power if n.power else _mat_sharp
+	return (_mat_heads_power if n.power else _mat_heads)[KeyMap.finger_for(n.lane)]
+
+
+## Power chords on the road: each one's bar rides with its notes, greys if any note is missed and
+## goes when the chord has passed; hitting every note of a chord sets off the big burst.
+func _update_chords(now: float, speed: float, delta: float) -> void:
+	_power_phase += delta
+	# Halos and bars shimmer together, so a chord's parts read as one thing; steady with motion off.
+	var shimmer: float = 0.82 + 0.18 * sin(_power_phase * TAU * 2.2) if Settings.motion else 1.0
+	if _mat_aura:
+		_mat_aura.emission_energy_multiplier = POWER_AURA_GLOW * shimmer
+		_mat_chord_bar.emission_energy_multiplier = POWER_BAR_GLOW * shimmer
+		for i: int in _mat_heads_power.size():
+			_mat_heads_power[i].emission_energy_multiplier = POWER_HEAD_GLOW * shimmer
+		_mat_sharp_power.emission_energy_multiplier = POWER_HEAD_GLOW * shimmer
+	while _chord_spawn < _chords.size() and float(_chords[_chord_spawn]["t"]) < now + lookahead + 0.4:
+		var chord: Dictionary = _chords[_chord_spawn]
+		chord["bar"] = _take_bar()
+		_chords_live.append(chord)
+		_chord_spawn += 1
+	var i: int = _chords_live.size() - 1
+	while i >= 0:
+		var chord: Dictionary = _chords_live[i]
+		var all_hit := true
+		var any_missed := false
+		for n: Chart.Note in chord["notes"]:
+			all_hit = all_hit and n.state == Chart.NoteState.HIT
+			any_missed = any_missed or n.state == Chart.NoteState.MISSED
+		if all_hit:
+			_power_burst(chord)
+			_drop_bar(chord)
+			_chords_live.remove_at(i)
+		elif float(chord["t"]) < now - 0.7:
+			_drop_bar(chord)
+			_chords_live.remove_at(i)
+		else:
+			var bar: MeshInstance3D = chord["bar"]
+			var span: float = float(chord["right"]) - float(chord["left"])
+			bar.scale = Vector3(span, 0.13, 0.26)
+			bar.position = Vector3((float(chord["left"]) + float(chord["right"])) * 0.5, NOTE_HEIGHT * POWER_HEIGHT * 0.5,
+				-(float(chord["t"]) - now) * speed - HEAD_LENGTH * 0.5)
+			bar.material_override = _mat_chord_dead if any_missed else _mat_chord_bar
+		i -= 1
+	for flash: Dictionary in _power_flashes:
+		var t: float = flash["t"]
+		if t >= 1.0:
+			continue
+		t = minf(1.0, t + delta * 2.6)
+		flash["t"] = t
+		var plate: MeshInstance3D = flash["plate"]
+		var ring: MeshInstance3D = flash["ring"]
+		var width: float = flash["width"]
+		plate.scale = Vector3(width + 1.6 * t, 0.04, 0.5 + 3.5 * t)
+		var ring_size: float = (width * 0.5 + 0.8) * (0.7 + 0.9 * t)
+		ring.scale = Vector3(ring_size, 1.0, ring_size * 0.6)
+		for mesh: MeshInstance3D in [plate, ring]:
+			var mat: StandardMaterial3D = mesh.material_override
+			mat.albedo_color.a = 0.95 * (1.0 - t)
+			mat.emission_energy_multiplier = 5.0 * (1.0 - t)
+			mesh.visible = t < 1.0
+
+
+func _take_bar() -> MeshInstance3D:
+	var bar: MeshInstance3D
+	if _chord_bars.is_empty():
+		bar = MeshInstance3D.new()
+		bar.mesh = _box
+		bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(bar)
+	else:
+		bar = _chord_bars.pop_back()
+	bar.visible = true
+	return bar
+
+
+func _drop_bar(chord: Dictionary) -> void:
+	var bar: MeshInstance3D = chord.get("bar")
+	if bar:
+		bar.visible = false
+		_chord_bars.append(bar)
+	chord["bar"] = null
+
+
+## The whole chord landed: a wide white flash and a ring across its lanes, and a big fountain of
+## sparks from its middle, on top of each note's own burst.
+func _power_burst(chord: Dictionary) -> void:
+	var x: float = (float(chord["left"]) + float(chord["right"])) * 0.5
+	var width: float = float(chord["right"]) - float(chord["left"]) + KEY_WIDTH
+	for flash: Dictionary in _power_flashes:
+		if float(flash["t"]) >= 1.0:
+			flash["t"] = 0.0
+			flash["width"] = width
+			(flash["plate"] as MeshInstance3D).position = Vector3(x, 0.5, -0.1)
+			(flash["ring"] as MeshInstance3D).position = Vector3(x, 0.55, -0.1)
+			break
+	var sparks: CPUParticles3D = _power_sparks[_next_power_spark]
+	_next_power_spark = (_next_power_spark + 1) % _power_sparks.size()
+	sparks.position = Vector3(x, 0.5, -0.1)
+	sparks.emission_box_extents = Vector3(width * 0.5, 0.1, 0.2)
+	sparks.restart()
+	sparks.emitting = true
+	if Settings.motion:
+		pulse(1.0)
 
 
 func _update_beat_lines(now: float, speed: float) -> void:
@@ -361,6 +527,16 @@ func _build_materials() -> void:
 	for color: Color in KeyMap.FINGER_COLORS:
 		_mat_heads.append(_emissive(color, 1.5))
 		_mat_bodies.append(_emissive(color, 0.55, 0.72))
+	# A power head keeps its finger's colour and glow: the white is in the bar and the
+	# halo rim. (Lifted toward white and lit at 2.6, with the halo at 3.2, the bloom turned a chord
+	# into one white smear: no finger colours, no letters.)
+	for color: Color in KeyMap.FINGER_COLORS:
+		_mat_heads_power.append(_emissive(color, POWER_HEAD_GLOW))
+	_mat_sharp_power = _emissive(COLOR_SHARP, POWER_HEAD_GLOW)
+	_mat_aura = _emissive(COLOR_POWER, POWER_AURA_GLOW, 0.85)
+	_mat_aura.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_chord_bar = _emissive(COLOR_POWER, POWER_BAR_GLOW)
+	_mat_chord_dead = _emissive(COLOR_DEAD, 0.1, 0.7)
 	_mat_sharp = _emissive(COLOR_SHARP, 1.6)
 	_mat_body_sharp = _emissive(COLOR_SHARP, 0.55, 0.72)
 	_mat_miss = _emissive(COLOR_MISS, 0.7, 0.75)
@@ -514,6 +690,42 @@ func _build_effects() -> void:
 		sparks.gravity = Vector3(0, -22, 0)
 		add_child(sparks)
 		_sparks.append(sparks)
+	for i: int in 3:
+		var plate := MeshInstance3D.new()
+		plate.mesh = _box
+		plate.visible = false
+		var plate_mat := _emissive(COLOR_POWER, 5.0, 0.9)
+		plate_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		plate_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		plate.material_override = plate_mat
+		add_child(plate)
+		var ring := MeshInstance3D.new()
+		ring.mesh = torus
+		ring.visible = false
+		var ring_mat := _emissive(COLOR_POWER, 5.0, 0.9)
+		ring_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ring.material_override = ring_mat
+		add_child(ring)
+		_power_flashes.append({"plate": plate, "ring": ring, "t": 1.0, "width": 1.0})
+		var fountain := CPUParticles3D.new()
+		fountain.mesh = spark_mesh
+		fountain.emitting = false
+		fountain.one_shot = true
+		fountain.amount = 48
+		fountain.lifetime = 0.6
+		fountain.explosiveness = 1.0
+		fountain.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+		fountain.direction = Vector3(0, 1, -0.2)
+		fountain.spread = 40.0
+		fountain.initial_velocity_min = 6.0
+		fountain.initial_velocity_max = 12.0
+		fountain.gravity = Vector3(0, -24, 0)
+		fountain.scale_amount_min = 1.2
+		fountain.scale_amount_max = 2.0
+		fountain.color = Color(1.0, 0.97, 0.88)
+		add_child(fountain)
+		_power_sparks.append(fountain)
 	_hold_light = OmniLight3D.new()
 	_hold_light.light_color = Color(0.85, 0.95, 1.0)
 	_hold_light.light_energy = 3.5

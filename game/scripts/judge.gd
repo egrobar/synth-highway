@@ -6,8 +6,10 @@ extends RefCounted
 ## hit, missed or held. Windows are in real seconds. Scored runs are always at
 ## full speed with no seeking, which closes the score farming the web build allows.
 
-const PERFECT_WINDOW := 0.07
-const GOOD_WINDOW := 0.16
+## A tad looser after playtesting (2026-11-11): 0.07 and 0.16 felt tight. The keys' light-up
+## follows GOOD_WINDOW, so lit still means a press counts.
+const PERFECT_WINDOW := 0.08
+const GOOD_WINDOW := 0.18
 ## Letting go this close to a hold's end counts as a full hold. Without it,
 ## notes that butt up against the next one would be impossible to complete.
 const HOLD_TAIL_GRACE := 0.15
@@ -73,6 +75,9 @@ func is_holding() -> bool:
 	return not _active_holds.is_empty()
 
 
+## Only notes on the pressed lane can match, and each press takes at most one note, so the notes
+## of a power chord (Hard) are judged one key each: one key never plays, or uses up, the other's
+## note, and the keys need not land on the same frame (tests/test_judge.gd, "power chords").
 func press(lane: int, source: Variant, t: float) -> void:
 	var best: Chart.Note = null
 	var best_offset: float = INF

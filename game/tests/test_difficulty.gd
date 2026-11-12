@@ -39,6 +39,23 @@ func _init() -> void:
 	var r: Dictionary = Difficulty.rate(finger)
 	_check((r["reasons"] as Array).has("finger jumps"), "a jumping index finger is named as the reason")
 
+	# Chords (Hard's power chords): notes struck together are not a fast run.
+	var singles := _stream(0.5, [0, 9], 80)
+	var chords := _chords(0.5, [[0, 7], [9, 2]], 80)  # each beat one note per hand
+	var as_run := _stream(0.25, [0, 7, 9, 2], 160)  # the same notes, one after another
+	_check(_score(chords) > _score(singles), "a chord is more work than one note")
+	_check(_score(chords) < _score(as_run), "a chord costs less than playing its notes as a run")
+	_check(_score(chords) < _score(singles) * 2.0, "a chord costs less than two notes' worth")
+	var chord_peak: float = float(Difficulty.rate(chords)["peak_nps"])
+	var single_peak: float = float(Difficulty.rate(singles)["peak_nps"])
+	_check(chord_peak <= single_peak * 1.5 + 0.01, "chords barely raise peak density (%.2f vs %.2f)" % [chord_peak, single_peak])
+	_check(not (Difficulty.rate(chords)["reasons"] as Array).has("tricky rhythm"), "an even beat of chords is not a tricky rhythm")
+	var one_hand := _chords(0.5, [[0, 3]], 80)  # A and F together, over and over
+	var two_hands := _chords(0.5, [[0, 7]], 80)  # A and K together
+	_check(_score(one_hand) > _score(two_hands), "a one-hand chord costs more than one across the hands")
+	var spread := _chords(0.5, [[0, 7], [9, 2]], 80, 0.02)  # the keys land 20 ms apart
+	_check(absf(_score(spread) - _score(chords)) < 0.05 * _score(chords), "a chord played 20 ms apart is still a chord")
+
 	print("%d checks, %d failures" % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -47,6 +64,17 @@ func _stream(gap: float, lanes: Array, count: int, start: float = 0.0) -> Array:
 	var out: Array = []
 	for i: int in count:
 		out.append({"t": start + i * gap, "d": 0.1, "l": lanes[i % lanes.size()]})
+	return out
+
+
+## A chord every `gap` seconds, cycling through `shapes` (lists of lanes); each note after the
+## first lands `spread` seconds after the one before.
+func _chords(gap: float, shapes: Array, count: int, spread: float = 0.0) -> Array:
+	var out: Array = []
+	for i: int in count:
+		var shape: Array = shapes[i % shapes.size()]
+		for k: int in shape.size():
+			out.append({"t": i * gap + k * spread, "d": 0.1, "l": shape[k], "pw": 1})
 	return out
 
 

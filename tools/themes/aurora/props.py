@@ -5,7 +5,8 @@ conduit for the deck beyond the glass, rows of solar panels, big ISS-style solar
 domes with a soft light inside, docking arms reaching out from the deck with a pod docked and
 blinking lights, a distant ring station (hub, spokes and habitation ring) that the world script
 hangs far off in the sky, small maintenance drones (static, hovering), and the player's transit
-pod hood.
+pod hood. And a transit ship (2026-11-11) that aurora.gd launches from beside a docking arm when
+the player reaches a combo milestone: nose toward +Y, engines (engine_glow) facing the camera.
 
 High-detail pass (2026-11-10): clean, maintained engineering rather than grime. The skyway wall
 has a kerb with a recessed light channel, a glazing sill and head beam, a glass handrail on clamp
@@ -1021,5 +1022,44 @@ def hood():
     return m.finish()
 
 
-export_all([wall, light_strip, conduit, solar_row, solar_wing, dome, docking_arm, station_hub, drone, hood],
+# The ship's engines (2026-11-11): bright, as the ship is seen from behind as it leaves. Not named
+# beacon_*, so it never blinks; aurora.gd flares it on launch.
+ENGINE = material("engine_glow", (0.6, 1.0, 0.85), emit=(0.6, 1.0, 0.86), strength=7.0)
+
+
+def ship():
+    """A transit ship that launches from the docking arms on the player's milestones (2026-11-11):
+    a lathed white hull 16 long with its nose toward +Y (it flies away from the camera, so the
+    engines face the player), a dark engine plate with three engine bells glowing inside, swept
+    wings and a dorsal fin with green and white nav lights, a framed canopy and a row of windows
+    down each side, and seam bands."""
+    m = Part("ship")
+    m.lathe([(0.0, 0.0), (1.25, 0.0), (1.55, 0.5), (1.75, 2.2), (1.75, 8.8), (1.55, 11.6), (1.15, 13.8), (0.6, 15.3),
+             (0.0, 16.0)], (0, 0, 2.0), HULL, segs=18, rot=TO_Y,
+            mats=[DARK, PEARL, HULL, HULL, HULL, HULL, PEARL, PEARL])
+    for y in (2.4, 6.0, 9.2):
+        m.cyl(1.78, 1.78, 0.12, (0, y, 2.0), STEEL, segs=18, rot=ALONG_Y)
+    # Engines: three bells on the tail plate, each with a glowing throat.
+    for x, z in ((0.0, 2.75), (-0.75, 1.55), (0.75, 1.55)):
+        m.cyl(0.4, 0.58, 0.8, (x, -0.35, z), TRIM, segs=12, rot=ALONG_Y)  # ALONG_Y puts r1 at +Y, by the hull
+        m.cyl(0.42, 0.42, 0.06, (x, -0.7, z), ENGINE, segs=12, rot=ALONG_Y)
+    # Swept wings and a dorsal fin.
+    for sx in (-1, 1):
+        m.poly([(sx * 1.6, 2.2, 1.7), (sx * 5.6, 0.9, 1.45), (sx * 5.6, 2.4, 1.45), (sx * 1.6, 8.0, 1.85),
+                (sx * 1.6, 2.2, 1.95), (sx * 5.6, 0.9, 1.6), (sx * 5.6, 2.4, 1.6), (sx * 1.6, 8.0, 2.0)],
+               [(0, 1, 2, 3), (7, 6, 5, 4), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)], HULL, bevel=True)
+        m.box((0.3, 0.5, 0.2), (sx * 5.55, 1.6, 1.53), BEACON_GREEN if sx < 0 else BEACON_WHITE)
+        for k in range(6):
+            m.box((0.12, 0.44, 0.34), (sx * 1.72, 9.6 + k * 0.6, 2.35), WINDOW)
+    m.poly([(-0.1, 1.0, 3.6), (-0.1, 4.6, 3.6), (-0.1, 2.2, 6.2), (-0.1, 1.2, 6.2),
+            (0.1, 1.0, 3.6), (0.1, 4.6, 3.6), (0.1, 2.2, 6.2), (0.1, 1.2, 6.2)],
+           [(0, 1, 2, 3), (7, 6, 5, 4), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)], PEARL, bevel=True)
+    m.box((0.24, 0.5, 0.24), (0, 1.5, 6.3), BEACON_WHITE)
+    # Canopy: a dark framed band wrapping the nose, lit from inside.
+    m.box((1.9, 1.6, 0.5), (0, 13.0, 3.0), DARK, bevel=True)
+    m.box((1.7, 1.2, 0.34), (0, 13.15, 3.15), WINDOW)
+    return m.finish()
+
+
+export_all([wall, light_strip, conduit, solar_row, solar_wing, dome, docking_arm, station_hub, drone, hood, ship],
            OUT_DIR, PREVIEW)

@@ -12,19 +12,21 @@ extends RefCounted
 ##   regions   [{num, name, upper, cleared, total, locked, selected}] for the tabs
 ##   region    {name, upper, genres, blurb, locked, locked_text}
 ##   rows      7 slots, the selected song always in slot 3 (the 4th); a slot is {} past either
-##             end of the list, else {index, n ("04"), title, upper, grades ("E– N–"),
+##             end of the list, else {index, n ("04"), title, upper, grades ("E– N– H–"),
 ##             level (1-10), selected, imported, freq (an AM dial frequency, for Red Frontier)}
 ##   count     songs in the region
 ##   song      the selected song, or {}: {title, upper, bpm, length ("1:39"), number (4),
 ##             best (grade at the chosen difficulty or ""), imported, remove_armed}
-##   cards     [easy, normal]: {name ("EASY"), level, notes, holds, counts ("147 notes · 1 hold",
-##             singular and plural right: use it rather than formatting notes and holds), keys,
-##             feel, selected, best}
+##   cards     [easy, normal, hard]: {name ("EASY"), key ("easy"), available, level, notes, holds,
+##             counts ("147 notes · 1 hold", singular and plural right: use it rather than
+##             formatting notes and holds), keys, sharps, power (power chords), feel, selected,
+##             best}. A level the song has no chart for (Hard, on charts made before it) has
+##             available false: draw it dimmed with a short "not charted yet", no level or counts.
 ##   practice  {on, text ("off" or "85% speed")}
 ##   locked    true when the region is not open yet (Enter Drive reads LOCKED)
 ##   message   a passing note to show (an import finished, a song removed), or ""
-## Actions a skin can register: "region" (index), "song" (index), "difficulty" ("easy" or
-## "normal"), "practice", "drive", "load".
+## Actions a skin can register: "region" (index), "song" (index), "difficulty" ("easy",
+## "normal" or "hard"), "practice", "drive", "load".
 
 const W := 1280.0
 const H := 720.0
@@ -36,7 +38,9 @@ const ROW_H := 50.0
 const ROW_PITCH := 56.0
 const LOAD := Rect2(40, 566, 500, 46)
 const DETAIL := Rect2(580, 100, 660, 230)
-const CARDS: Array[Rect2] = [Rect2(580, 350, 320, 140), Rect2(920, 350, 320, 140)]
+## Easy, Normal and Hard across the zone the design gave two cards (x 580-1240, y 350-490), with the
+## design's 20 px gaps: 207, 206 and 207 wide.
+const CARDS: Array[Rect2] = [Rect2(580, 350, 207, 140), Rect2(807, 350, 206, 140), Rect2(1033, 350, 207, 140)]
 const PRACTICE := Rect2(580, 512, 180, 80)
 const DRIVE := Rect2(776, 512, 464, 80)
 const HINTS_Y := 660.0
@@ -71,8 +75,9 @@ static func register_hits(screen: RouteScreen, m: Dictionary) -> void:
 			screen.hit(row_rect(slot), "song", row["index"])
 	screen.hit(LOAD, "load")
 	if not (m.get("song", {}) as Dictionary).is_empty():
-		screen.hit(CARDS[0], "difficulty", "easy")
-		screen.hit(CARDS[1], "difficulty", "normal")
+		var cards: Array = m.get("cards", [])
+		for i: int in mini(cards.size(), CARDS.size()):
+			screen.hit(CARDS[i], "difficulty", str((cards[i] as Dictionary).get("key", Chart.DIFFICULTIES[i])))
 		screen.hit(PRACTICE, "practice")
 		screen.hit(DRIVE, "drive")
 
@@ -95,6 +100,15 @@ static func fit(value: String, f: Font, size: int, width: float) -> String:
 	while cut.length() > 1 and text_width(cut + "…", f, size) > width:
 		cut = cut.left(cut.length() - 1)
 	return cut.strip_edges() + "…"
+
+
+## A list like "Fast runs, finger jumps" cut back an item at a time until it fits `width`, then
+## ellipsized: on the narrow difficulty cards the first reason says more than half of two.
+static func fit_list(value: String, f: Font, size: int, width: float) -> String:
+	var items: PackedStringArray = value.split(", ")
+	while items.size() > 1 and text_width(", ".join(items), f, size) > width:
+		items.resize(items.size() - 1)
+	return fit(", ".join(items), f, size, width)
 
 
 ## Text inside `rect`: aligned left, centre or right, and placed vertically by `valign`

@@ -1,5 +1,5 @@
 extends SceneTree
-## Prints every song's difficulty (Difficulty.rate) for both levels, hardest first, plus the
+## Prints every song's difficulty (Difficulty.rate) for each of its levels, hardest first, plus the
 ## score spread: used to calibrate Difficulty.SCORE_AT_1 / SCORE_AT_10 and to check the model.
 ##   tools/godot.sh --headless -s res://tests/rate_all.gd
 
@@ -9,8 +9,9 @@ func _init() -> void:
 	for song: Dictionary in SongLibrary.all():
 		var meta: Dictionary = Chart.read_meta(str(song["path"]))
 		var levels: Dictionary = meta.get("difficulties", {})
-		for level: String in Chart.DIFFICULTIES:
-			var raw: Array = levels.get(level, meta.get("notes", []))
+		# Only the levels the chart carries: Hard is missing from charts made before it.
+		for level: String in Chart.playable_levels(meta):
+			var raw: Array = levels.get(Chart.resolve_level(meta, level), meta.get("notes", []))
 			var r: Dictionary = Difficulty.rate(raw)
 			rows.append([float(r["score"]), level, str(song["id"]), float(r["level"]), float(r["peak_nps"]),
 				", ".join(r["reasons"]), str(song["theme"]), raw.size()])

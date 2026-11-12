@@ -59,7 +59,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_detail(s, m)
 	if not (m["song"] as Dictionary).is_empty():
 		var cards: Array = m["cards"]
-		for i: int in mini(2, cards.size()):
+		for i: int in mini(CARDS.size(), cards.size()):
 			_card(s, CARDS[i], cards[i])
 		_practice(s, m)
 	_drive(s, m)
@@ -352,7 +352,12 @@ static func _split(words: PackedStringArray, start: int, lines: int, f: Font, si
 
 # ---------------------------------------------------------------- difficulty, practice, drive
 
+## A difficulty card. Three share the zone two had: the feel line drops its second reason (or
+## ellipsizes) to leave room for the best grade.
 func _card(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
+	if not card.get("available", true):
+		_blank_card(s, rect, card)
+		return
 	var on: bool = card["selected"]
 	var border: float = 3.0 if on else 2.0
 	if on:
@@ -389,7 +394,19 @@ func _card(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
 		var best_w: float = text_width(best_label, best_font, 11)
 		text(s, Rect2(x + w - best_w, top, best_w, 13.0 * 1.12), best_label, best_font, 11, tint)
 		feel_w -= best_w + 12.0
-	text(s, Rect2(x, top, feel_w, 13.0 * 1.12), str(card["feel"]), bold, 13, tint)
+	text(s, Rect2(x, top, feel_w, 13.0 * 1.12), fit_list(str(card["feel"]), bold, 13, feel_w), bold, 13, tint)
+
+
+## A level the song has no chart for yet: a smoked, dashed-out slot on the pink, black type, no level.
+func _blank_card(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
+	box(s, rect, Color(BG, 0.32))
+	dashed_box(s, rect, BG, 2.0, 7.0, 5.0)
+	var x: float = rect.position.x + 20.0
+	var w: float = rect.size.x - 40.0
+	var name_font: Font = font("Anton", 400, 1.0)
+	var baseline: float = rect.position.y + 16.0 + name_font.get_ascent(26)
+	text_at(s, Vector2(x, baseline), str(card["name"]), name_font, 26, BG)
+	text(s, Rect2(x, baseline + 12.0, w, 16), "NOT CHARTED YET", font("JetBrains Mono", 700, 1.0), 11, BG)
 
 
 ## A skewed black slab with a pill toggle; on, the slab takes an acid border, the knob slides

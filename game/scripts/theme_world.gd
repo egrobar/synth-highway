@@ -10,6 +10,18 @@ extends Node3D
 ## both for free; override on_beat() to add its own. Repeating things are grouped and wrapped by their tile length, so
 ## the road scrolls forever at a fixed, small cost. A region's assets live in
 ## res://assets/themes/<id>/ (models/, textures/, audio/ambience.wav).
+##
+## The world also reacts to how the player is doing (Evan's playtest, 2026-11-11: "environmental
+## responses"). PlaySession reads the run and calls milestone() (combo 25, 50, 100, then every 100),
+## streak() (a run of quick hits), burst() (a long hold carried home, a power chord struck whole),
+## falter() (a big combo broken, misses in a row, the tank running low), recover() (going again after
+## faltering) and set_flow() (a long combo held past full heat). Each lands in an on_* override; the
+## defaults throw a swell of light over the scene (flash()), and each region adds its own spectacle,
+## placed ahead or to the sides, never over the note lanes or the keys. With Settings.motion off
+## (calm()) a region plays calm versions: things still happen, but nothing flashes, strobes or shakes.
+## The fx_* helpers below build those effects cheaply: billboard particles, beams and sprites with
+## their own small shaders, no shadows, kept out of the weathering pass; ride() carries a placed
+## effect down the road with the scenery.
 
 ## How much faster the scenery runs at full heat. Scenery only: the notes never speed up.
 const HEAT_SPEED := 0.3
@@ -67,6 +79,19 @@ var _beat: float = 0.0
 var _heat: float = 0.0
 var _target_heat: float = 0.0
 
+## The colour of the default swell of light the player's events throw over the scene (set in build()).
+var event_tint: Color = Color(1.0, 0.86, 0.62)
+var _swell: float = 0.0
+var _swell_peak: float = 0.0
+var _swell_decay: float = 1.5
+var _event_light: DirectionalLight3D
+var _flow: float = 0.0
+var _target_flow: float = 0.0
+var _faltering: bool = false
+var _riders: Array[Node3D] = []
+var _event_players: Array[AudioStreamPlayer] = []
+var _event_sounds: Dictionary = {}
+
 
 func setup(theme_id: String, half_width: float) -> void:
 	id = theme_id
@@ -74,6 +99,11 @@ func setup(theme_id: String, half_width: float) -> void:
 	_flicker.seed = 1987
 	build()
 	_weather_props()
+	# The default events' light: off (and skipped by the renderer) until something happens. No shadows.
+	_event_light = DirectionalLight3D.new()
+	_event_light.light_energy = 0.0
+	_event_light.visible = false
+	add_child(_event_light)
 
 
 ## Override: build the region.
@@ -87,12 +117,22 @@ func _process(delta: float) -> void:
 	# Heat builds over a few seconds and falls away faster, so a broken combo is felt at once.
 	_heat = move_toward(_heat, _target_heat, delta * (0.35 if _target_heat > _heat else 1.6))
 	_beat = maxf(_beat - delta * 3.6, 0.0)
+	_update_swell(delta)
+	# Flow builds slowly (it is a reward for holding on) and drains a little faster.
+	_flow = move_toward(_flow, _target_flow, delta * (0.12 if _target_flow > _flow else 0.4))
 	# The scenery keeps pace with the notes at whatever note speed the player chose.
-	_distance += delta * (Highway.LENGTH / Highway.lookahead) * _speed * (1.0 + HEAT_SPEED * _heat)
+	var travelled: float = delta * (Highway.LENGTH / Highway.lookahead) * _speed * (1.0 + HEAT_SPEED * _heat)
+	_distance += travelled
+	for i: int in range(_riders.size() - 1, -1, -1):
+		if is_instance_valid(_riders[i]):
+			_riders[i].position.z += travelled
+		else:
+			_riders.remove_at(i)
 	if _world_env:
-		_world_env.glow_intensity = _glow_base * (1.0 + 0.2 * _beat + 0.3 * _heat)
+		_world_env.glow_intensity = _glow_base * (1.0 + 0.2 * _beat + 0.3 * _heat + 0.35 * _swell + 0.12 * _flow)
 	if _edge_paint:
-		_edge_paint.emission_energy_multiplier = _edge_base * (1.0 + 0.9 * _beat) + (0.5 * _beat + 0.5 * _heat)
+		_edge_paint.emission_energy_multiplier = (_edge_base * (1.0 + 0.9 * _beat) + (0.5 * _beat + 0.5 * _heat)
+			+ 0.8 * _swell)
 	for mat: StandardMaterial3D in _scrolling_materials:
 		mat.uv1_offset.y = -_distance / ROAD_TILE
 	for mat: ShaderMaterial in _scrolling_shaders:
@@ -142,6 +182,358 @@ func heat() -> float:
 
 func distance() -> float:
 	return _distance
+
+
+# ---------------------------------------------------------------- answering the player
+
+## A combo milestone: level 1 at 25, 2 at 50, 3 at 100, 4 at 200, one more for every 100 after.
+## Each level is bigger than the last.
+func milestone(level: int) -> void:
+	on_milestone(maxi(level, 1))
+
+
+## A run of quick hits, 0 to 1: longer runs are stronger.
+func streak(strength: float) -> void:
+	on_streak(clampf(strength, 0.0, 1.0))
+
+
+## A punctuation of the run, 0 to 1: a long hold carried to its end (kind "hold") or a power chord
+## struck whole (kind "power").
+func burst(strength: float, kind: String = "") -> void:
+	on_burst(clampf(strength, 0.0, 1.0), kind)
+
+
+## The player is faltering, 0 to 1: a big combo broken, misses in a row, the tank running low.
+## Things go wrong in the world until recover().
+func falter(severity: float) -> void:
+	_faltering = true
+	on_falter(clampf(severity, 0.0, 1.0))
+
+
+## The player got going again after faltering: the world rights itself (or replaces what broke),
+## so a long run never looks wrecked for good.
+func recover() -> void:
+	if not _faltering:
+		return
+	_faltering = false
+	on_recover()
+
+
+## A long combo held past full heat, 0 to 1. Builds slowly; read it with flow().
+func set_flow(level: float) -> void:
+	_target_flow = clampf(level, 0.0, 1.0)
+
+
+func flow() -> float:
+	return _flow
+
+
+func faltering() -> bool:
+	return _faltering
+
+
+## Motion is off: play calm versions (no flashes, strobes or shakes; slow swells are fine).
+func calm() -> bool:
+	return not Settings.motion
+
+
+## A run starts (or ends): every event effect back to rest at once.
+func settle() -> void:
+	_faltering = false
+	_target_flow = 0.0
+	_flow = 0.0
+	_swell = 0.0
+	_swell_peak = 0.0
+	on_settle()
+
+
+## Overrides: a region's own answers. The defaults swell the light; call super() to keep it.
+func on_milestone(level: int) -> void:
+	flash(event_tint, 0.5 + 0.18 * float(mini(level, 6)))
+
+
+func on_streak(strength: float) -> void:
+	flash(event_tint, 0.3 * strength)
+
+
+func on_burst(strength: float, _kind: String) -> void:
+	flash(event_tint, 0.28 * strength)
+
+
+func on_falter(_severity: float) -> void:
+	pass
+
+
+func on_recover() -> void:
+	flash(event_tint, 0.22)
+
+
+## Put every event effect back to rest at once (a new run, or leaving one).
+func on_settle() -> void:
+	pass
+
+
+## A swell of light over the scene from `yaw` degrees (0 straight ahead, positive to the right),
+## with extra bloom and brighter edge lines. Sharp with motion on; with it off, a slow, soft swell.
+func flash(colour: Color, amount: float, yaw: float = 0.0) -> void:
+	if _event_light == null:
+		return
+	if calm():
+		amount *= 0.35
+	if amount >= maxf(_swell, _swell_peak):
+		_event_light.light_color = colour
+		_event_light.rotation_degrees = Vector3(-24.0, 180.0 - yaw, 0.0)
+	_swell_peak = maxf(_swell_peak, amount)
+
+
+func _update_swell(delta: float) -> void:
+	if _swell_peak > _swell:
+		# Rises at once (a flash), or over a second or two when calm.
+		_swell = move_toward(_swell, _swell_peak, delta * (0.6 if calm() else 30.0))
+		if _swell >= _swell_peak:
+			_swell_peak = 0.0
+	else:
+		_swell_peak = 0.0
+		_swell = move_toward(_swell, 0.0, delta * (0.3 if calm() else 1.3))
+	if _event_light:
+		_event_light.light_energy = _swell * 0.6
+		_event_light.visible = _swell > 0.004
+
+
+## Plays this region's audio/event_<name>.wav if it has one, on the effects bus, under the music.
+func event_sound(sound: String, volume_db: float = -8.0) -> void:
+	# Headless runs (the bot tests) have no audio device; a sound left playing as they quit leaks.
+	if AudioServer.get_driver_name() == "Dummy":
+		return
+	var path: String = asset("audio/event_%s.wav" % sound)
+	if not _event_sounds.has(path):
+		_event_sounds[path] = load(path) if ResourceLoader.exists(path) else null
+	var stream: AudioStream = _event_sounds[path]
+	if stream == null:
+		return
+	if _event_players.is_empty():
+		for i: int in 2:
+			var player := AudioStreamPlayer.new()
+			player.bus = Settings.BUS_EFFECTS
+			add_child(player)
+			_event_players.append(player)
+	# Two voices, so a falter does not cut a launch short.
+	var voice: AudioStreamPlayer = _event_players[0] if not _event_players[0].playing else _event_players[1]
+	voice.stream = stream
+	voice.volume_db = volume_db
+	voice.play()
+
+
+## From now on `node` moves with the ground, as the road's own scenery does: an effect placed ahead
+## is carried past the player. Returns the node.
+func ride(node: Node3D) -> Node3D:
+	if not _riders.has(node):
+		_riders.append(node)
+	return node
+
+
+func unride(node: Node3D) -> void:
+	_riders.erase(node)
+
+
+# ---------------------------------------------------------------- effect helpers
+
+const FX_BILLBOARD := """
+	mat4 mat_world = mat4(normalize(INV_VIEW_MATRIX[0]), normalize(INV_VIEW_MATRIX[1]),
+		normalize(INV_VIEW_MATRIX[2]), MODEL_MATRIX[3]);
+	MODELVIEW_MATRIX = VIEW_MATRIX * mat_world;
+	MODELVIEW_MATRIX = MODELVIEW_MATRIX * mat4(vec4(length(MODEL_MATRIX[0].xyz), 0.0, 0.0, 0.0),
+		vec4(0.0, length(MODEL_MATRIX[1].xyz), 0.0, 0.0), vec4(0.0, 0.0, length(MODEL_MATRIX[2].xyz), 0.0),
+		vec4(0.0, 0.0, 0.0, 1.0));
+	MODELVIEW_NORMAL_MATRIX = mat3(MODELVIEW_MATRIX);
+"""
+## Light that adds to the scene (sparks, lava, fireworks, engine flames): HDR, so it blooms.
+const FX_GLOW := """
+shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled%s;
+uniform sampler2D dot_tex : source_color, filter_linear, repeat_disable;
+uniform vec4 tint : source_color = vec4(1.0);
+uniform float energy = 3.0;
+void vertex() {%s}
+void fragment() {
+	float a = texture(dot_tex, UV).a;
+	ALBEDO = COLOR.rgb * tint.rgb * energy * a * COLOR.a * tint.a;
+}
+"""
+## Soft see-through puffs (ash, steam, mist, exhaust smoke): their colour is their light.
+const FX_SMOKE := """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled%s;
+uniform sampler2D dot_tex : source_color, filter_linear, repeat_disable;
+uniform vec4 tint : source_color = vec4(1.0);
+void vertex() {%s}
+void fragment() {
+	ALBEDO = COLOR.rgb * tint.rgb;
+	ALPHA = COLOR.a * tint.a * texture(dot_tex, UV).a;
+}
+"""
+## A shaft of light: an open cone added over the scene, fading along its length and at its edges.
+const FX_BEAM := """
+shader_type spatial;
+render_mode unshaded, blend_add, cull_disabled, depth_draw_never, shadows_disabled, fog_disabled;
+uniform vec3 tint : source_color = vec3(1.0);
+uniform float strength = 0.15;
+uniform float half_length = 50.0;
+varying float along;
+void vertex() {
+	along = clamp((VERTEX.y + half_length) / (2.0 * half_length), 0.0, 1.0);
+}
+void fragment() {
+	float facing = abs(dot(normalize(NORMAL), normalize(VIEW)));
+	ALBEDO = tint * strength * pow(max(1.0 - along, 0.0), 1.3) * smoothstep(0.05, 0.7, facing);
+}
+"""
+
+static var _fx_shaders: Dictionary = {}
+static var _fx_dot: GradientTexture2D
+
+
+## A material for effects. kind "glow" adds light, "smoke" is soft see-through puffs; both take their
+## colour from the particles' colour ramp (times `tint`, and `energy` for glow). billboard: each quad
+## turns to face the camera. fogged false keeps a far-off effect clear of the distance fog, as the
+## sky is (a volcano's fountain 400 m away would otherwise vanish into it).
+func fx_material(kind: String, energy: float = 3.0, fogged: bool = true, billboard: bool = true,
+		tint: Color = Color.WHITE) -> ShaderMaterial:
+	var key: String = "%s-%s-%s" % [kind, fogged, billboard]
+	if not _fx_shaders.has(key):
+		var shader := Shader.new()
+		var code: String = FX_GLOW if kind == "glow" else FX_SMOKE
+		shader.code = code % ["" if fogged else ", fog_disabled", FX_BILLBOARD if billboard else ""]
+		_fx_shaders[key] = shader
+	var mat := ShaderMaterial.new()
+	mat.shader = _fx_shaders[key]
+	mat.set_shader_parameter("dot_tex", fx_dot())
+	mat.set_shader_parameter("tint", tint)
+	if kind == "glow":
+		mat.set_shader_parameter("energy", energy)
+	return mat
+
+
+## A soft round dot, white with its alpha falling off to the edge: every particle's shape.
+static func fx_dot() -> GradientTexture2D:
+	if _fx_dot == null:
+		_fx_dot = GradientTexture2D.new()
+		_fx_dot.width = 64
+		_fx_dot.height = 64
+		_fx_dot.fill = GradientTexture2D.FILL_RADIAL
+		_fx_dot.fill_from = Vector2(0.5, 0.5)
+		_fx_dot.fill_to = Vector2(1.0, 0.5)
+		var falloff := Gradient.new()
+		falloff.set_color(0, Color(1.0, 1.0, 1.0, 1.0))
+		falloff.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+		falloff.add_point(0.35, Color(1.0, 1.0, 1.0, 0.55))
+		_fx_dot.gradient = falloff
+	return _fx_dot
+
+
+## A colour ramp from [[offset 0-1, Color], ...] (alpha included: fade in and out with it).
+static func fx_ramp(stops: Array) -> Gradient:
+	var ramp := Gradient.new()
+	ramp.offsets = PackedFloat32Array(stops.map(func(s: Array) -> float: return float(s[0])))
+	ramp.colors = PackedColorArray(stops.map(func(s: Array) -> Color: return s[1] as Color))
+	return ramp
+
+
+## An effect emitter, off until fired (emitting = true; restart() for a one-shot burst): `amount`
+## camera-facing dots `size` metres across, coloured by `ramp` over their life. Particles live in
+## world space by default, so a moving emitter leaves a trail. Never drawn into shadows.
+func fx_particles(material: Material, amount: int, lifetime: float, size: float, ramp: Gradient) -> CPUParticles3D:
+	var quad := QuadMesh.new()
+	quad.size = Vector2(size, size)
+	quad.material = material
+	var p := CPUParticles3D.new()
+	p.mesh = quad
+	p.amount = amount
+	p.lifetime = lifetime
+	p.emitting = false
+	p.local_coords = false
+	p.color_ramp = ramp
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.set_meta("no_weathering", true)
+	return p
+
+
+## A shaft of light `length` long from a lamp at the returned pivot, pointing up its +Y (turn the
+## pivot to aim it). Its strength is the "strength" parameter of the mesh's material.
+func fx_beam(length: float, near_radius: float, far_radius: float, colour: Color, strength: float) -> Node3D:
+	var pivot := Node3D.new()
+	var mat := ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = FX_BEAM
+	mat.shader = shader
+	mat.set_shader_parameter("tint", colour)
+	mat.set_shader_parameter("strength", strength)
+	mat.set_shader_parameter("half_length", length * 0.5)
+	var cone := CylinderMesh.new()
+	cone.bottom_radius = near_radius
+	cone.top_radius = far_radius
+	cone.height = length
+	cone.radial_segments = 14
+	cone.rings = 1
+	cone.cap_top = false
+	cone.cap_bottom = false
+	cone.material = mat
+	var beam := MeshInstance3D.new()
+	beam.mesh = cone
+	beam.position.y = length * 0.5
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	pivot.add_child(beam)
+	pivot.set_meta("no_weathering", true)
+	pivot.set_meta("beam_material", mat)
+	return pivot
+
+
+## A glowing, camera-facing sprite (a glint, a beacon flare, an engine's glow), `size` metres across.
+func fx_sprite(colour: Color, size: float, energy: float, fogged: bool = true) -> MeshInstance3D:
+	var quad := QuadMesh.new()
+	quad.size = Vector2(size, size)
+	var sprite := MeshInstance3D.new()
+	sprite.mesh = quad
+	sprite.material_override = fx_material("glow", energy, fogged, true, colour)
+	sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sprite.set_meta("no_weathering", true)
+	return sprite
+
+
+## Every StandardMaterial3D under `root` (default: the whole world) whose name starts with one of
+## `prefixes`, once each (imported materials are shared by every copy of a model), with its emission
+## as built: [{"mat": StandardMaterial3D, "base": float}]. Turn them up and down with set_emission().
+func emissive_materials(prefixes: Array, root: Node = null) -> Array[Dictionary]:
+	var found: Array[Dictionary] = []
+	var seen: Dictionary = {}
+	for node: Node in (root if root else self).find_children("*", "MeshInstance3D", true, false):
+		var mesh: Mesh = (node as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		for s: int in mesh.get_surface_count():
+			var mat := mesh.surface_get_material(s) as StandardMaterial3D
+			if mat == null or seen.has(mat.get_instance_id()):
+				continue
+			for prefix: String in prefixes:
+				if mat.resource_name.begins_with(prefix):
+					seen[mat.get_instance_id()] = true
+					found.append({"mat": mat, "base": mat.emission_energy_multiplier})
+					break
+	return found
+
+
+func set_emission(entries: Array[Dictionary], level: float) -> void:
+	for entry: Dictionary in entries:
+		(entry["mat"] as StandardMaterial3D).emission_energy_multiplier = float(entry["base"]) * level
+
+
+## Where a point of the world would sit on screen, roughly: true when it is ahead of the camera, past
+## the near scenery and within `half_angle` degrees of straight ahead (the Stage's camera looks down
+## the road from z = 13.6).
+static func ahead_in_view(at: Vector3, near_z: float = -25.0, far_z: float = -260.0, half_angle: float = 38.0) -> bool:
+	if at.z > near_z or at.z < far_z:
+		return false
+	return absf(rad_to_deg(atan2(at.x, 13.6 - at.z))) < half_angle
 
 
 # ---------------------------------------------------------------- helpers for regions

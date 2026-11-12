@@ -16,6 +16,15 @@ extends ThemeWorld
 ## warning beacons strobe. Every so often an eruption somewhere ahead throws an orange flash over
 ## the scene: the sky, the ambient light and the plumes flare, then die away.
 ##
+## The world answers the player (2026-11-11, ThemeWorld's on_* events). A volcano stands on the
+## horizon ahead and to the right, smoking quietly. On a combo milestone it erupts for real: a lava
+## fountain, an ash column lit orange from below, glowing bombs arcing out over its flanks, the
+## eruption flash, its rivulets and crater flaring; each milestone bigger than the last. A fast
+## streak sends lava surging down the river beside the road, spurting as it goes, and the vents
+## flare; a long combo keeps the crater fountaining. Faltering chokes the plumes, lava and vents dark
+## while the volcano coughs black smoke, and a drill rig in view throws sparks and slumps; when the
+## player gets going again the rig rights itself and the fire comes back.
+##
 ## High detail (2026-11-10): the props are faceted, fractured rock and real plant (props.py), and
 ## `weathering` / `surfaces` below give them their surfaces: sulphur frost on every upward face,
 ## soot low down, rock maps on basalt, crust and sulphur, brushed steel, riveted cladding. The lava
@@ -31,6 +40,14 @@ const SKY_ENERGY := 1.0
 const LAVA_LIGHT := Color(1.0, 0.42, 0.12)
 const RIVER_X := 15.0  # the right lava river's centre, from the road edge
 const PYLON_X := 12.0  # the pylons' centre line, from the road edge (their footings stay clear of the fissures)
+## The volcano: ahead and to the right (Jupiter hangs left), beyond the far landmarks' loop so none of
+## them drives through it, and hung like the sky (it never comes nearer). Its summit sits about six
+## degrees over the horizon, in the band of sky above the scenery, well clear of the note lanes.
+const VOLCANO_POSITION := Vector3(330.0, 0.0, -760.0)
+const VOLCANO_SCALE := 2.4
+const CRATER_HEIGHT := 30.0  # the crater floor in volcano.glb (tools/themes/mesa/props.py), unscaled
+const VOLCANO_YAW := 23.0  # degrees right of straight ahead, for the eruption flash
+const VOLCANO_LIGHT := Color(1.0, 0.45, 0.12)
 
 var _env: Environment
 var _flash_light: DirectionalLight3D
@@ -48,6 +65,28 @@ var _next_eruption: float = 5.0
 var _eruption_age: float = -1.0
 var _eruption_strength: float = 1.0
 var _flash: float = 0.0
+# The volcano and the player's events.
+var _volcano_glow: Array[Dictionary] = []
+var _fountain: CPUParticles3D
+var _bombs: CPUParticles3D
+var _ash: CPUParticles3D
+var _wisp: CPUParticles3D
+var _soot: CPUParticles3D
+var _trickle: CPUParticles3D
+var _crater_light: OmniLight3D
+var _volcano_age: float = -1.0
+var _volcano_level: int = 1
+var _volcano_heat: float = 0.0
+var _volcano_target: float = 0.0
+var _trickle_until: float = 0.0
+var _surge: float = 0.0
+var _river_spurts: CPUParticles3D
+var _choke: float = 0.0
+var _target_choke: float = 0.0
+var _rigs: Array[Node3D] = []
+var _slumped: Array[Node3D] = []
+var _sparks: CPUParticles3D
+var _sparks_until: float = 0.0
 
 
 func build() -> void:
@@ -143,6 +182,9 @@ func build() -> void:
 	_flash_light.light_energy = 0.0
 	_flash_light.rotation_degrees = Vector3(-12.0, 180.0, 0.0)
 	add_child(_flash_light)
+	event_tint = Color(1.0, 0.55, 0.2)
+	_build_volcano()
+	_build_event_effects()
 
 	for found: Node in find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := found as MeshInstance3D
@@ -159,11 +201,16 @@ func _process(delta: float) -> void:
 	_clock += delta
 	_pulse = maxf(_pulse - delta * 2.5, 0.0)
 	_update_eruption(delta)
-	# Lava breathes slowly, swells a touch on the beat and flares with an eruption.
-	var lava_level: float = 0.9 + 0.07 * sin(_clock * 1.3) + 0.03 * sin(_clock * 3.7) + 0.12 * _pulse + 0.35 * _flash
+	_update_events(delta)
+	# Lava breathes slowly, swells a touch on the beat and flares with an eruption; a streak surges it,
+	# faltering chokes it (and the vents and plumes) dark.
+	var lava_level: float = ((0.9 + 0.07 * sin(_clock * 1.3) + 0.03 * sin(_clock * 3.7) + 0.12 * _pulse + 0.35 * _flash
+		+ 0.9 * _surge) * (1.0 - 0.65 * _choke))
 	_set_levels(_lava, lava_level)
-	_set_levels(_vents, 0.75 + 0.25 * absf(sin(_clock * 2.1 + sin(_clock * 0.7))) + 0.4 * _flash)
-	_set_levels(_plumes, 0.7 + 0.3 * (0.5 + 0.5 * sin(_clock * TAU / 7.0)) + 1.3 * _flash)
+	_set_levels(_vents, (0.75 + 0.25 * absf(sin(_clock * 2.1 + sin(_clock * 0.7))) + 0.4 * _flash + 0.7 * _surge)
+		* (1.0 - 0.65 * _choke))
+	_set_levels(_plumes, (0.7 + 0.3 * (0.5 + 0.5 * sin(_clock * TAU / 7.0)) + 1.3 * _flash) * (1.0 + 0.4 * flow())
+		* (1.0 - 0.8 * _choke))
 	for entry: Dictionary in _glows:
 		(entry["light"] as OmniLight3D).light_energy = float(entry["base"]) * lava_level
 	# Red aviation lights flash slowly; the amber warning beacons strobe.
@@ -192,9 +239,279 @@ func _update_eruption(delta: float) -> void:
 			_flash += _eruption_strength * 0.5 * exp(-(a - 0.4) * 3.5)
 		if a > 4.0:
 			_eruption_age = -1.0
-	_env.background_energy_multiplier = SKY_ENERGY * (1.0 + 0.3 * _flash)
-	_env.ambient_light_energy = AMBIENT_ENERGY + 0.25 * _flash
+	# Faltering chokes the fires, and the whole scene goes a little darker with them.
+	_env.background_energy_multiplier = SKY_ENERGY * (1.0 + 0.3 * _flash) * (1.0 - 0.2 * _choke)
+	_env.ambient_light_energy = (AMBIENT_ENERGY + 0.25 * _flash) * (1.0 - 0.3 * _choke)
 	_flash_light.light_energy = _flash * 1.3
+
+
+## The volcano on the horizon and its eruption: emitters at the crater (not under the scaled mountain,
+## so sizes and speeds are plain metres). Everything there is fog-free, as the sky is: 800 m out, the
+## distance fog would swallow it whole. Nothing there casts a shadow.
+func _build_volcano() -> void:
+	var volcano: Node3D = (load(asset("models/volcano.glb")) as PackedScene).instantiate()
+	volcano.position = VOLCANO_POSITION
+	volcano.scale = Vector3.ONE * VOLCANO_SCALE
+	volcano.rotation_degrees.y = 200.0
+	add_child(volcano)
+	_no_shadows(volcano)
+	for found: Node in volcano.find_children("*", "MeshInstance3D", true, false):
+		var mesh: Mesh = (found as MeshInstance3D).mesh
+		for s: int in mesh.get_surface_count():
+			var mat := mesh.surface_get_material(s) as StandardMaterial3D
+			if mat:
+				mat.disable_fog = true  # also keeps the weathering pass off it: too far for detail
+				# Dimmed a little instead: free of the fog, it would stand out of the haze too sharply.
+				mat.albedo_color = mat.albedo_color.darkened(0.3)
+	_volcano_glow = emissive_materials(["volcano_lava", "volcano_crater"], volcano)
+	var crater := Node3D.new()
+	crater.position = VOLCANO_POSITION + Vector3(0.0, CRATER_HEIGHT * VOLCANO_SCALE, 0.0)
+	add_child(crater)
+	# The lava fountain: hot beads thrown up out of the crater and falling back on the cone.
+	_fountain = fx_particles(fx_material("glow", 3.2, false), 280, 3.2, 7.5, fx_ramp([
+		[0.0, Color(1.0, 0.78, 0.4, 1.0)], [0.3, Color(1.0, 0.45, 0.08, 1.0)], [1.0, Color(0.7, 0.12, 0.02, 0.0)]]))
+	_fountain.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	_fountain.emission_sphere_radius = 9.0
+	_fountain.direction = Vector3.UP
+	_fountain.spread = 15.0
+	_fountain.initial_velocity_min = 38.0
+	_fountain.initial_velocity_max = 62.0
+	_fountain.gravity = Vector3(0.0, -26.0, 0.0)
+	_fountain.scale_amount_min = 0.6
+	_fountain.scale_amount_max = 1.5
+	crater.add_child(_fountain)
+	# Bombs: big glowing clots arcing out over the flanks.
+	_bombs = fx_particles(fx_material("glow", 5.0, false), 40, 5.5, 9.0, fx_ramp([
+		[0.0, Color(1.0, 0.95, 0.7, 1.0)], [0.5, Color(1.0, 0.45, 0.1, 1.0)], [1.0, Color(0.6, 0.1, 0.02, 0.0)]]))
+	_bombs.one_shot = true
+	_bombs.explosiveness = 0.85
+	_bombs.direction = Vector3.UP
+	_bombs.spread = 38.0
+	_bombs.initial_velocity_min = 42.0
+	_bombs.initial_velocity_max = 72.0
+	_bombs.gravity = Vector3(0.0, -22.0, 0.0)
+	_bombs.scale_amount_min = 0.5
+	_bombs.scale_amount_max = 1.3
+	crater.add_child(_bombs)
+	# The ash column: puffs that start hot (lit from below by the fountain) and cool to dark ash as
+	# they climb and spread.
+	# Many small puffs stack into a column; a few big ones read as grey discs.
+	_ash = fx_particles(fx_material("smoke", 1.0, false), 130, 9.0, 15.0, fx_ramp([
+		[0.0, Color(1.0, 0.6, 0.2, 0.0)], [0.04, Color(1.0, 0.55, 0.18, 0.95)], [0.25, Color(0.72, 0.33, 0.14, 0.9)],
+		[0.55, Color(0.3, 0.17, 0.12, 0.8)], [1.0, Color(0.12, 0.09, 0.08, 0.0)]]))
+	_ash.direction = Vector3.UP
+	_ash.spread = 9.0
+	# Slow enough that the column builds in view rather than shooting off the top of the screen.
+	_ash.initial_velocity_min = 9.0
+	_ash.initial_velocity_max = 14.0
+	_ash.damping_min = 0.4
+	_ash.damping_max = 0.8
+	_ash.gravity = Vector3(1.5, 0.5, 0.0)
+	var swell := Curve.new()
+	swell.max_value = 4.0
+	swell.add_point(Vector2(0.0, 0.6))
+	swell.add_point(Vector2(1.0, 3.0))
+	_ash.scale_amount_curve = swell
+	_ash.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	_ash.emission_sphere_radius = 8.0
+	crater.add_child(_ash)
+	# At rest a thin wisp of fume, so it reads as alive; choked, thick black soot.
+	_wisp = fx_particles(fx_material("smoke", 1.0, false), 20, 10.0, 11.0, fx_ramp([
+		[0.0, Color(0.5, 0.26, 0.14, 0.0)], [0.12, Color(0.42, 0.24, 0.15, 0.22)], [1.0, Color(0.2, 0.15, 0.13, 0.0)]]))
+	_wisp.direction = Vector3(0.15, 1.0, 0.0)
+	_wisp.spread = 8.0
+	_wisp.initial_velocity_min = 4.0
+	_wisp.initial_velocity_max = 6.0
+	_wisp.scale_amount_curve = swell
+	_wisp.preprocess = 10.0
+	crater.add_child(_wisp)
+	_wisp.emitting = true  # only once it is in the tree: its preprocess reads its global transform
+	_soot = fx_particles(fx_material("smoke", 1.0, false), 70, 9.0, 16.0, fx_ramp([
+		[0.0, Color(0.2, 0.15, 0.12, 0.0)], [0.08, Color(0.2, 0.15, 0.13, 0.85)], [1.0, Color(0.12, 0.1, 0.09, 0.0)]]))
+	_soot.direction = Vector3(0.2, 1.0, 0.0)
+	_soot.spread = 14.0
+	_soot.initial_velocity_min = 8.0
+	_soot.initial_velocity_max = 12.0
+	_soot.scale_amount_curve = swell
+	crater.add_child(_soot)
+	# A long combo keeps a small fountain going.
+	_trickle = fx_particles(fx_material("glow", 4.0, false), 60, 2.4, 4.5, fx_ramp([
+		[0.0, Color(1.0, 0.8, 0.45, 1.0)], [1.0, Color(0.8, 0.2, 0.03, 0.0)]]))
+	_trickle.direction = Vector3.UP
+	_trickle.spread = 12.0
+	_trickle.initial_velocity_min = 18.0
+	_trickle.initial_velocity_max = 30.0
+	_trickle.gravity = Vector3(0.0, -26.0, 0.0)
+	_trickle.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	_trickle.emission_sphere_radius = 5.0
+	crater.add_child(_trickle)
+	# The fire lights the mountain's own flanks (its range ends well short of the road).
+	_crater_light = OmniLight3D.new()
+	_crater_light.light_color = VOLCANO_LIGHT
+	_crater_light.omni_range = 280.0
+	_crater_light.omni_attenuation = 1.2
+	_crater_light.light_energy = 0.0
+	_crater_light.position = Vector3(0.0, 14.0, 30.0)
+	crater.add_child(_crater_light)
+
+
+## Near the road: lava spurting out of the river on a streak, and sparks for a failing drill rig.
+func _build_event_effects() -> void:
+	_river_spurts = fx_particles(fx_material("glow", 3.5), 110, 1.0, 0.55, fx_ramp([
+		[0.0, Color(1.0, 0.85, 0.45, 1.0)], [0.6, Color(1.0, 0.4, 0.08, 1.0)], [1.0, Color(0.7, 0.12, 0.02, 0.0)]]))
+	_river_spurts.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	_river_spurts.emission_box_extents = Vector3(2.4, 0.2, 60.0)
+	_river_spurts.position = Vector3(road_half + RIVER_X, 0.4, -75.0)
+	_river_spurts.spread = 9.0
+	_river_spurts.gravity = Vector3(0.0, -14.0, 0.0)
+	_river_spurts.scale_amount_min = 0.5
+	_river_spurts.scale_amount_max = 1.4
+	add_child(_river_spurts)
+	_sparks = fx_particles(fx_material("glow", 5.0), 90, 1.3, 0.28, fx_ramp([
+		[0.0, Color(1.0, 0.95, 0.75, 1.0)], [0.4, Color(1.0, 0.6, 0.15, 1.0)], [1.0, Color(0.9, 0.25, 0.05, 0.0)]]))
+	_sparks.local_coords = true  # they ride with the rig they fall from
+	_sparks.direction = Vector3.UP
+	_sparks.spread = 80.0
+	_sparks.initial_velocity_min = 5.0
+	_sparks.initial_velocity_max = 13.0
+	_sparks.gravity = Vector3(0.0, -12.0, 0.0)
+	add_child(_sparks)
+
+
+# ---------------------------------------------------------------- answering the player
+
+func on_milestone(level: int) -> void:
+	_volcano_level = mini(level, 5)
+	_volcano_age = 0.0
+	_volcano_target = 1.0 + 0.2 * float(_volcano_level)
+	event_sound("erupt", -10.0)
+	var bigger: float = float(_volcano_level - 1) / 4.0
+	_fountain.initial_velocity_max = lerpf(48.0, 70.0, bigger)
+	_bombs.restart()
+	if not calm():
+		# The eruption flash, from the volcano's side of the sky, and no random eruption on top of it.
+		_eruption_age = 0.0
+		_eruption_strength = 0.8 + 0.18 * float(_volcano_level)
+		_flash_light.rotation_degrees = Vector3(-9.0, 180.0 - VOLCANO_YAW, 0.0)
+		_next_eruption = _clock + _rng.randf_range(12.0, 20.0)
+
+
+func on_streak(strength: float) -> void:
+	_surge = maxf(_surge, 0.5 + 0.6 * strength)
+	_volcano_target = maxf(_volcano_target, 0.3 * strength)
+	super(strength * 0.6)
+
+
+func on_burst(strength: float, kind: String) -> void:
+	_volcano_target = maxf(_volcano_target, 0.45 * strength)
+	_trickle_until = _clock + 1.4
+	super(strength, kind)
+
+
+func on_falter(severity: float) -> void:
+	_target_choke = maxf(_target_choke, severity)
+	_slump_a_rig(severity)
+	event_sound("choke", -12.0)
+
+
+func on_recover() -> void:
+	_target_choke = 0.0
+	for rig: Node3D in _slumped:
+		var tween := create_tween().set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tween.tween_property(rig, "rotation:z", 0.0, 1.8)
+		tween.tween_property(rig, "position:y", 0.0, 1.8)
+	_slumped.clear()
+	super()
+
+
+func on_settle() -> void:
+	_volcano_age = -1.0
+	_volcano_target = 0.0
+	_volcano_heat = 0.0
+	_surge = 0.0
+	_choke = 0.0
+	_target_choke = 0.0
+	_trickle_until = 0.0
+	_sparks_until = 0.0
+	for emitter: CPUParticles3D in [_fountain, _bombs, _ash, _soot, _trickle, _river_spurts, _sparks]:
+		emitter.restart()
+		emitter.emitting = false
+	for rig: Node3D in _slumped:
+		rig.rotation.z = 0.0
+		rig.position.y = 0.0
+	_slumped.clear()
+
+
+## A drill rig in view (or the next one coming) throws sparks and slumps, leaning away from the road.
+func _slump_a_rig(severity: float) -> void:
+	var chosen: Node3D = null
+	for rig: Node3D in _rigs:
+		if not _slumped.has(rig) and ahead_in_view(rig.position, -30.0, -220.0, 60.0):
+			if chosen == null or rig.position.z > chosen.position.z:
+				chosen = rig
+	if chosen == null:
+		for rig: Node3D in _rigs:
+			if not _slumped.has(rig) and rig.position.z < -30.0 and (chosen == null or rig.position.z > chosen.position.z):
+				chosen = rig
+	if chosen == null:
+		return
+	_slumped.append(chosen)
+	var lean: float = deg_to_rad(lerpf(7.0, 15.0, severity))
+	var tween := create_tween().set_parallel(true)
+	if calm():
+		tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tween.tween_property(chosen, "rotation:z", -lean, 2.5)
+		tween.tween_property(chosen, "position:y", -0.9, 2.5)
+		return
+	tween.set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
+	tween.tween_property(chosen, "rotation:z", -lean, 1.1).set_delay(0.35)
+	tween.tween_property(chosen, "position:y", -0.9, 1.1).set_delay(0.35)
+	_sparks.reparent(chosen, false)
+	_sparks.position = Vector3(0.0, 15.0, 0.0)
+	_sparks.restart()
+	_sparks_until = _clock + 1.6
+
+
+## The volcano's eruption over time, its glow and light, the streak's surge and the choke.
+func _update_events(delta: float) -> void:
+	_volcano_target = maxf(_volcano_target - delta * 0.16, 0.0)
+	_volcano_heat = move_toward(_volcano_heat, _volcano_target, delta * (0.8 if calm() else 6.0))
+	if _volcano_age >= 0.0:
+		_volcano_age += delta
+		var a: float = _volcano_age
+		var lasts: float = 2.2 + 0.8 * float(_volcano_level)
+		_fountain.emitting = a < lasts
+		_ash.emitting = _volcano_level >= 2 and a > 0.4 and a < lasts + 1.5
+		# The biggest go off twice.
+		if _volcano_level >= 3 and a - delta < 1.9 and a >= 1.9:
+			_bombs.restart()
+			if not calm():
+				_eruption_age = 0.0
+				_eruption_strength = 0.6 + 0.1 * float(_volcano_level)
+		if a > lasts + 10.0:
+			_volcano_age = -1.0
+	_trickle.emitting = (flow() > 0.35 or _clock < _trickle_until) and _volcano_age < 0.0 and _choke < 0.5
+	_choke = move_toward(_choke, _target_choke, delta * (0.7 if _target_choke > _choke else 0.3))
+	_soot.emitting = _choke > 0.3
+	_wisp.emitting = _choke <= 0.3
+	_surge = maxf(_surge - delta * 0.3, 0.0)
+	_river_spurts.emitting = _surge > 0.2
+	if _river_spurts.emitting:
+		# Thrown up and carried down the river at the scenery's own speed, so they ride with the lava.
+		var along: float = (Highway.LENGTH / Highway.lookahead) * _speed * (1.0 + HEAT_SPEED * _heat)
+		var up: float = 5.0 + 3.0 * _surge
+		_river_spurts.direction = Vector3(0.0, up, along).normalized()
+		_river_spurts.initial_velocity_min = Vector2(up * 0.7, along).length()
+		_river_spurts.initial_velocity_max = Vector2(up, along).length()
+	if _sparks_until > 0.0 and _clock > _sparks_until:
+		_sparks.emitting = false
+		_sparks_until = 0.0
+	# At rest the rivulets only smoulder; an eruption sets them blazing.
+	var glow: float = (0.32 + 2.6 * _volcano_heat + 0.35 * flow()) * (1.0 - 0.7 * _choke)
+	if not calm():
+		glow *= 1.0 + 0.12 * _volcano_heat * sin(_clock * 23.0)
+	set_emission(_volcano_glow, glow)
+	_crater_light.light_energy = (0.6 + 13.0 * _volcano_heat + 2.0 * flow()) * (1.0 - 0.7 * _choke)
 
 
 func _set_levels(entries: Array[Dictionary], level: float) -> void:
@@ -226,6 +543,7 @@ func _dress(node: Node3D, model: String) -> void:
 			_glow(node, Vector3(-6.0, 1.6, 2.0), LAVA_LIGHT, 12.0, 2.0)
 		"drill_rig":
 			_glow(node, Vector3(0.0, 2.6, 0.0), LAVA_LIGHT, 9.0, 1.4)
+			_rigs.append(node)
 		"hazard_gantry":
 			_glow(node, Vector3(0.0, 5.0, 1.6), Color(1.0, 0.86, 0.55), 7.0, 0.8, false)
 		"plume":

@@ -18,6 +18,13 @@ extends RefCounted
 ##            (gaps that are not simple multiples of the gap before are hard to read).
 ##   level    the score on a log scale, calibrated so the built-in library spans 1 to 10
 ##            (tests/rate_all.gd prints every chart's score: rerun it after changing the model).
+##   chords   notes within Chart.CHORD_SECONDS of each other (Hard's power chords) are struck
+##            together, not a fast run: each note after the first costs a fixed modest effort
+##            (less with the other hand) with no fast-note bonus and no decay between them, the
+##            move to the next note is from the chord's note on the same hand, the
+##            rhythm is read from onsets (a chord is one), and in peak density a chord's extra notes
+##            count CHORD_DENSITY each. Without this a chord's ~0 s gap read as the fastest run in
+##            the song and an absurd rhythm, and a few power chords would have topped the scale.
 ##
 ## Charts come in as raw note dictionaries (t, d, l lane, s sharp flag, p pitch), so menus can
 ## rate songs without building playable charts.
@@ -28,6 +35,12 @@ const STRAIN_SECONDS := 2.0
 const SCORE_AT_1 := 1.6
 const SCORE_AT_10 := 16.5
 const FAST_GAP := 0.25
+
+## The second (or third) note of a chord: with the other hand, or with another finger of the same hand.
+const CHORD_OTHER_HAND := 0.35
+const CHORD_SAME_HAND := 0.6
+## A chord's extra notes in the peak-density count (a single note counts 1).
+const CHORD_DENSITY := 0.5
 
 ## Sharps by key (W E R T Y U I O P): which hand plays each, touch-typing style.
 const SHARP_HANDS: Array[int] = [0, 0, 0, 0, 1, 1, 1, 1, 1]
@@ -41,25 +54,56 @@ static func rate(raw_notes: Array) -> Dictionary:
 		return {"level": 1.0, "score": 0.0, "reasons": [], "peak_nps": 0.0}
 	var strains: Array[float] = []
 	var strain: float = 0.0
-	var counts := {"finger": 0, "row": 0, "hold": 0, "jack": 0, "fast": 0}
-	var irregular: int = 0
-	var timed: int = 0
+	var counts := {"finger": 0, "row": 0, "hold": 0, "jack": 0, "fast": 0, "chord": 0}
+	var joins: Array[bool] = _chord_joins(notes)
+	# Each single note or chord as its first note's time: the rhythm the player reads.
+	var onsets: Array[float] = [float(notes[0]["t"])]
+	var group_start: int = 0
 	for i: int in range(1, notes.size()):
-		var a: Dictionary = notes[i - 1]
 		var b: Dictionary = notes[i]
-		var gap: float = maxf(float(b["t"]) - float(a["t"]), 0.06)
-		var effort: float = _move_cost(a, b, gap, counts)
+		if joins[i]:
+			var same_hand := false
+			for k: int in range(group_start, i):
+				same_hand = same_hand or notes[k]["hand"] == b["hand"]
+			strain += CHORD_SAME_HAND if same_hand else CHORD_OTHER_HAND
+			counts["chord"] += 1
+			strains.append(strain)
+			continue
+		var gap: float = maxf(float(b["t"]) - float(notes[i - 1]["t"]), 0.06)
+		var origin: int = i - 1
+		if i - 1 > group_start:
+			# After a chord each hand moves on from its own note of it: the move is from the chord's
+			# note on this note's hand (the cheapest, if the chord had several there), else from the
+			# chord as a whole. (Taking the cheapest of all its notes made a chord lower the cost of
+			# what followed: Hard charts built on Normal rated below Normal.)
+			var cheapest: float = INF
+			var on_hand := false
+			for k: int in range(group_start, i):
+				var same: bool = notes[k]["hand"] == b["hand"]
+				if on_hand and not same:
+					continue
+				var cost: float = _move_cost(notes[k], b, gap, {"finger": 0, "row": 0, "hold": 0, "jack": 0})
+				if (same and not on_hand) or cost < cheapest:
+					cheapest = cost
+					origin = k
+					on_hand = on_hand or same
+		var effort: float = _move_cost(notes[origin], b, gap, counts)
 		if gap < FAST_GAP:
 			effort *= 1.0 + 0.5 * clampf((FAST_GAP - gap) / 0.15, 0.0, 1.0)
 			counts["fast"] += 1
 		strain = strain * exp(-gap / STRAIN_SECONDS) + effort
 		strains.append(strain)
-		if i >= 2:
-			var before: float = float(a["t"]) - float(notes[i - 2]["t"])
-			if gap < 1.0 and before < 1.0 and before > 0.02:
-				timed += 1
-				if not _simple_ratio(gap / before):
-					irregular += 1
+		onsets.append(float(b["t"]))
+		group_start = i
+	var irregular: int = 0
+	var timed: int = 0
+	for i: int in range(2, onsets.size()):
+		var gap: float = maxf(onsets[i] - onsets[i - 1], 0.06)
+		var before: float = onsets[i - 1] - onsets[i - 2]
+		if gap < 1.0 and before < 1.0 and before > 0.02:
+			timed += 1
+			if not _simple_ratio(gap / before):
+				irregular += 1
 	var sorted: Array[float] = strains.duplicate()
 	sorted.sort()
 	var peak: float = sorted[int(floor(0.95 * float(sorted.size() - 1)))]
@@ -71,7 +115,7 @@ static func rate(raw_notes: Array) -> Dictionary:
 	var irregular_share: float = float(irregular) / maxf(float(timed), 1.0)
 	var score: float = (0.6 * peak + 0.4 * body) * (1.0 + 0.3 * irregular_share)
 	var level: float = 1.0 + 9.0 * clampf(log(maxf(score, 0.001) / SCORE_AT_1) / log(SCORE_AT_10 / SCORE_AT_1), 0.0, 1.0)
-	var peak_nps: float = _peak_density(notes)
+	var peak_nps: float = _peak_density(notes, joins)
 	return {"level": level, "score": score, "peak_nps": peak_nps,
 		"reasons": _reasons(counts, notes.size(), irregular_share, peak_nps)}
 
@@ -116,8 +160,22 @@ static func _normalised(raw_notes: Array) -> Array:
 			entry["row"] = 0
 			entry["x"] = float(home)
 		out.append(entry)
-	out.sort_custom(func(p: Dictionary, q: Dictionary) -> bool: return float(p["t"]) < float(q["t"]))
+	out.sort_custom(func(p: Dictionary, q: Dictionary) -> bool:
+		return float(p["t"]) < float(q["t"]) or (float(p["t"]) == float(q["t"]) and int(p["lane"]) < int(q["lane"])))
 	return out
+
+
+## For each note, whether it joins the chord begun by an earlier note (within Chart.CHORD_SECONDS
+## of that chord's first note).
+static func _chord_joins(notes: Array) -> Array[bool]:
+	var joins: Array[bool] = []
+	var start: float = -INF
+	for n: Dictionary in notes:
+		var joined: bool = float(n["t"]) - start <= Chart.CHORD_SECONDS
+		joins.append(joined)
+		if not joined:
+			start = float(n["t"])
+	return joins
 
 
 static func _move_cost(a: Dictionary, b: Dictionary, gap: float, counts: Dictionary) -> float:
@@ -155,14 +213,18 @@ static func _simple_ratio(ratio: float) -> bool:
 	return false
 
 
-static func _peak_density(notes: Array) -> float:
-	var best: int = 0
+## Notes per second in the busiest 2 seconds; a chord's extra notes count CHORD_DENSITY each.
+static func _peak_density(notes: Array, joins: Array[bool]) -> float:
+	var best: float = 0.0
+	var inside: float = 0.0
 	var start: int = 0
 	for i: int in notes.size():
+		inside += CHORD_DENSITY if joins[i] else 1.0
 		while float(notes[i]["t"]) - float(notes[start]["t"]) > 2.0:
+			inside -= CHORD_DENSITY if joins[start] else 1.0
 			start += 1
-		best = maxi(best, i - start + 1)
-	return float(best) / 2.0
+		best = maxf(best, inside)
+	return best / 2.0
 
 
 ## The two things that stand out most about the chart, in a few words each.

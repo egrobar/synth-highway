@@ -3,7 +3,7 @@ extends SceneTree
 ## saves a frame. Independent of the menus, so a region can be checked alone.
 ##
 ##   godot --always-on-top --path game -s res://tests/preview.gd -- --theme=<id> --out=/abs/frame.png
-##         [--song=<song id> --at=<song seconds> --difficulty=easy|normal]
+##         [--song=<song id> --at=<song seconds> --difficulty=easy|normal|hard]
 ## Without --song it captures the empty road after 3 s. Audio is muted.
 ## Windowed runs need --always-on-top on macOS, or an occluded window renders black.
 

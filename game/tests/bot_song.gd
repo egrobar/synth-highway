@@ -1,7 +1,7 @@
 extends SceneTree
 ## Plays a whole song with a bot on the manual clock, headless, and prints the result.
 ##   godot --headless --path game -s res://tests/bot_song.gd -- --song=<id> [--theme=<id>]
-##         [--bot=perfect|tapper|sloppy|afk] [--difficulty=easy|normal] [--chart=/abs/chart.json]
+##         [--bot=perfect|tapper|sloppy|afk] [--difficulty=easy|normal|hard] [--chart=/abs/chart.json]
 ## Exits non-zero if the perfect bot fails to get an S, which would mean an unplayable chart.
 
 

@@ -7,7 +7,7 @@ follows one set of playability rules.
 
 Chart file format (game/data/songs/<id>.json, or user://songs/<id>/chart.json):
   id, title, theme, bpm, beats_per_bar, beat_offset, duration, backing, lead,
-  sections, source ("builtin" or "imported"), lanes ("home_row"), difficulties {easy, normal}
+  sections, source ("builtin" or "imported"), lanes ("home_row"), difficulties {easy, normal[, hard]}
   (each note {t, d, p, l}: seconds, seconds, MIDI pitch, home-row lane 0-9), and
   notes (a copy of normal, for older readers).
 Score event format (for tools/song/render_score.scd): [time, instrument, midi, seconds, amp, pan]
@@ -249,6 +249,10 @@ def write_chart(path: pathlib.Path, meta: dict, normal: list[dict]) -> dict:
     if folded_normal:
         print(f"   lanes: {folded_normal} of {len(normal)} notes folded by an octave to fit the home row")
     chart = {**meta, "lanes": "home_row", "difficulties": {"easy": easy, "normal": normal}, "notes": normal}
+    # A melody that rates as Hard becomes Hard, with a thinned Normal (split_hard.py; imported
+    # here because it imports this module through stem_chart).
+    from split_hard import add_hard
+    chart = add_hard(chart)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(chart, indent=1))
     return chart

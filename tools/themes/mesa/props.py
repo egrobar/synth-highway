@@ -7,6 +7,11 @@ sulphur crystals and little glowing fumaroles for scatter, a drill rig and an or
 warning beacons, a radiation-hazard sign gantry (beside the road, never over it), heavy cable
 pylons whose cables tile, hazard bollards for the shoulders, and the player's armoured hauler hood.
 
+The volcano (2026-11-11): a big stratovolcano that mesa.gd hangs on the horizon ahead and to the
+right and makes erupt for real when the player reaches a combo milestone (Evan's playtest asked for a
+volcano exploding in the background). Its materials are volcano_*, kept apart from the lava* that
+breathes, so only an eruption flares them.
+
 High detail (2026-11-10). Rock is built from convex hulls of jittered rings and point clouds, so
 every piece is faceted and chipped rather than a smooth primitive: crag spires are stacks of lava
 flows (each stratum bulges, steps in at the next one, leaves a ledge for sulphur frost, and some
@@ -1600,5 +1605,72 @@ def hood():
     return m.finish()
 
 
+# The volcano's own materials (2026-11-11). mesa.gd hangs the volcano far off like the sky, with fog off
+# on these, so they are darker than their near cousins; volcano_lava and volcano_crater flare when it
+# erupts for real (the player's combo milestones), and are left out of the lava* breathing.
+VOLCANO_ROCK = material("volcano_basalt", (0.03, 0.026, 0.027), rough=0.92)
+VOLCANO_ASH = material("volcano_ash", (0.055, 0.045, 0.04), rough=0.95)
+VOLCANO_SULPHUR = material("volcano_sulphur", (0.36, 0.25, 0.035), rough=0.85)
+VOLCANO_LAVA = material("volcano_lava", (0.45, 0.07, 0.01), emit=(1.0, 0.26, 0.03), strength=2.2)
+VOLCANO_CRATER = material("volcano_crater", (0.6, 0.2, 0.03), emit=(1.0, 0.45, 0.08), strength=4.0)
+
+
+def volcano():
+    """The volcano on the horizon (2026-11-11, for the player's milestones): a stratovolcano 60 across
+    and 32 high (the world script scales it up), its lumpy flanks dark basalt with a grey ash mantle
+    higher up and sulphur crusting the rim, a breached crater full of glowing lava, a parasitic cone
+    on one flank, and lava rivulets running down every side from the rim, glowing faintly at rest.
+    The eruption itself (fountain, ash, bombs) is particles in mesa.gd; this is only the mountain."""
+    m = Part("volcano", width=0.0, crease=25.0)
+    outer = [(60.0, -0.6, 0.05, 0.0), (49.0, 3.6, 0.06, 0.8), (38.0, 9.0, 0.07, 1.0), (28.0, 15.5, 0.07, 1.0),
+             (20.0, 21.5, 0.06, 0.8), (14.0, 26.5, 0.05, 0.6), (10.6, 30.0, 0.05, 0.5), (9.4, 32.0, 0.04, 0.6)]
+    inner = [(7.6, 30.4, 0.05, 0.3), (5.8, 28.2, 0.03, 0.1)]
+    lathe(m, outer + inner, 28, [VOLCANO_ROCK, VOLCANO_ROCK, VOLCANO_ROCK, VOLCANO_ASH, VOLCANO_ASH,
+                                 VOLCANO_SULPHUR, VOLCANO_SULPHUR, VOLCANO_ROCK, VOLCANO_ROCK],
+          seed=91, top_mat=VOLCANO_CRATER)
+
+    def slope_z(rad):
+        for p0, p1 in zip(outer, outer[1:]):
+            if p1[0] <= rad <= p0[0]:
+                return p0[1] + (p1[1] - p0[1]) * (p0[0] - rad) / (p0[0] - p1[0])
+        return 0.0
+
+    r = random.Random(93)
+    # Clots and horns of welded spatter round the rim.
+    for k in range(14):
+        a = TAU * (k + r.uniform(-0.35, 0.35)) / 14
+        d = r.uniform(8.6, 10.2)
+        s = r.uniform(1.4, 2.4)
+        chunk(m, r, math.cos(a) * d, math.sin(a) * d, (s, s * 0.8, s * 0.8), r.choice([VOLCANO_ROCK, VOLCANO_SULPHUR]),
+              n=8, bury=0.4, z=31.2 + r.uniform(-0.6, 0.3))
+    # A parasitic cone on the flank, with its own little glowing vent.
+    px, py = 30.0 * math.cos(2.3), 30.0 * math.sin(2.3)
+    lathe(m, [(9.0, slope_z(30.0) - 2.0, 0.06, 0.0), (6.0, slope_z(30.0) + 2.4, 0.07, 0.3),
+              (3.0, slope_z(30.0) + 5.0, 0.06, 0.2), (2.0, slope_z(30.0) + 4.4, 0.04, 0.0)], 10,
+          [VOLCANO_ROCK, VOLCANO_ASH, VOLCANO_ROCK], loc=(px, py, 0.0), seed=94, top_mat=VOLCANO_LAVA)
+    # Lava rivulets from the rim down every side: flat, wandering ribbons lying on the slope,
+    # narrowing as they run, each ending in a toe (as on the spatter cones, at mountain scale).
+    for k in range(9):
+        a = TAU * (k + r.uniform(0.1, 0.9)) / 9
+        foot_r = r.uniform(30.0, 52.0)
+        width = r.uniform(1.6, 2.4)
+        prev = None
+        rad = 9.8
+        while rad <= foot_r:
+            aa = a + r.uniform(-0.04, 0.04) + 0.003 * rad
+            c = Vector((rad * math.cos(aa), rad * math.sin(aa), slope_z(rad) + 0.5))
+            side = Vector((-math.sin(aa), math.cos(aa), 0.0))
+            cur = [c + side * width, c - side * width, c + Vector((0, 0, 0.6))]
+            if prev:
+                m.hull([tuple(p) for p in prev + cur], VOLCANO_LAVA)
+            prev = cur
+            width *= 0.9
+            rad += r.uniform(6.0, 8.0)
+        if prev:
+            m.hull(jring(r, prev[2].x, prev[2].y, prev[2].z - 1.0, 6, width * 1.8, jit=0.25)
+                   + jring(r, prev[2].x, prev[2].y, prev[2].z - 0.2, 6, width * 1.2, jit=0.25), VOLCANO_LAVA)
+    return m.finish()
+
+
 export_all([crag, columns, spatter_cone, plume, fissure, lava_river, sulphur_rock, crystal, vent, drill_rig,
-            smelter, hazard_gantry, pylon, bollard, hood], OUT_DIR, PREVIEW)
+            smelter, hazard_gantry, pylon, bollard, hood, volcano], OUT_DIR, PREVIEW)

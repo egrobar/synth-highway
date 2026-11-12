@@ -7,13 +7,19 @@ extends Node
 ## the results screen after running out of gas): no fail, optionally slower, never
 ## saved. A player with no saved runs starts on Easy.
 ##
+## Three levels, Easy, Normal and Hard (TAB cycles them on the route). Hard is missing from
+## charts made before it: the chosen level is kept as the player's preference, and a song
+## without Hard shows and plays Normal while its Hard card reads "not charted yet".
+##
 ## The route screen shows everything at once: a strip of regions along the top,
 ## the selected region's songs in the middle, and the selected song's details on
 ## the right. Regions unlock in order: clearing any song in one opens the next.
 ##
 ## Options for automated checks, passed after "--" on the command line:
-##   --bot=perfect|tapper|sloppy|afk  --song=<id>  --difficulty=easy|normal
-##       play a song with a bot through the real input path (add --fast for headless, no audio)
+##   --bot=perfect|tapper|sloppy|afk  --song=<id>  --difficulty=easy|normal|hard
+##       play a song with a bot through the real input path (add --fast for headless, no audio);
+##       --difficulty also picks the level the route opens on. A song without Hard plays Normal,
+##       and the printed RESULT's "difficulty" says which level actually played.
 ##   --muted                silence output (timing still runs on the real device)
 ##   --shots=DIR [--shot-at=SECONDS]   screenshots during a real-time bot run
 ##   --screen=title|route --shot=PATH [--region=<id>] [--song=<id>]   capture a screen and quit
@@ -103,7 +109,7 @@ func _ready() -> void:
 		AudioServer.set_bus_mute(0, true)
 	if _options.has("region"):
 		_region_index = maxi(0, _region_ids().find(str(_options["region"])))
-	if _options.has("difficulty"):
+	if _options.has("difficulty") and Chart.DIFFICULTIES.has(str(_options["difficulty"])):
 		_difficulty = str(_options["difficulty"])
 	if _options.has("bot"):
 		_start_run(SongLibrary.find(str(_options.get("song", "county_line"))))
@@ -349,9 +355,13 @@ func _home_row_guide(top: float) -> Control:
 	var note := Ui.label("Notes arrive in the colour of the finger that plays them. Index fingers reach for G and H; Easy never uses them.", 24, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(note, 0.0, 0.0, 1.0, 0.0, -100, 140, 100, 176, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(note)
-	var sharps := Ui.label("On Normal, sharps arrive in orange: play them on the row above, W E R T Y U I O P, between the home keys.", 24, Color(1.0, 0.62, 0.25), HORIZONTAL_ALIGNMENT_CENTER)
+	var sharps := Ui.label("On Normal and Hard, sharps arrive in orange: play them on the row above, W E R T Y U I O P, between the home keys.", 24, Color(1.0, 0.62, 0.25), HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(sharps, 0.0, 0.0, 1.0, 0.0, -140, 178, 140, 214, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(sharps)
+	# Hard's new thing, in the power chords' own white.
+	var power := Ui.label("On Hard, power chords: notes joined by a white bar. Strike them together.", 24, Highway.COLOR_POWER, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(power, 0.0, 0.0, 1.0, 0.0, -140, 216, 140, 252, HORIZONTAL_ALIGNMENT_CENTER)
+	box.add_child(power)
 	return box
 
 
@@ -434,7 +444,7 @@ func _route_model(message: String) -> Dictionary:
 			continue
 		var song: Dictionary = _songs[index]
 		rows.append({"index": index, "n": "%02d" % (index + 1), "title": song["title"], "upper": str(song["title"]).to_upper(),
-			"grades": _grades_text(song), "level": SongLibrary.level_of(song, _difficulty), "selected": index == selected,
+			"grades": _grades_text(song), "level": SongLibrary.level_of(song, _level_for(song)), "selected": index == selected,
 			"imported": song["source"] == "imported", "freq": _dial_frequency(index, _songs.size())})
 	var detail: Dictionary = {}
 	var cards: Array = []
@@ -443,7 +453,7 @@ func _route_model(message: String) -> Dictionary:
 		var length: int = int(round(float(song["duration"])))
 		detail = {"title": song["title"], "upper": str(song["title"]).to_upper(), "bpm": int(round(float(song["bpm"]))),
 			"length": "%d:%02d" % [length / 60, length % 60], "number": selected + 1,
-			"best": str(_save.best_for(song["id"], _difficulty).get("grade", "")), "imported": song["source"] == "imported",
+			"best": str(_save.best_for(song["id"], _level_for(song)).get("grade", "")), "imported": song["source"] == "imported",
 			"remove_armed": _remove_armed_until > Time.get_ticks_msec(), "station": str(song.get("station", ""))}
 		cards = _difficulty_cards(song)
 	var practising: bool = _practice_step > 0
@@ -458,7 +468,25 @@ func _route_model(message: String) -> Dictionary:
 	}
 
 
-## "E– N–", with each difficulty's best grade in place of the dash once it has one.
+## The level a song plays at: the chosen one, or Normal where the song has no Hard chart yet.
+func _level_for(song: Dictionary) -> String:
+	if SongLibrary.has_level(song, _difficulty):
+		return _difficulty
+	return "normal"
+
+
+## The chosen level moved on by `step` (TAB: Easy, Normal, Hard, round again), skipping a level
+## the song has no chart for.
+func _cycle_difficulty(song: Dictionary, step: int) -> String:
+	var at: int = maxi(Chart.DIFFICULTIES.find(_difficulty if song.is_empty() else _level_for(song)), 0)
+	for i: int in range(1, Chart.DIFFICULTIES.size() + 1):
+		var level: String = Chart.DIFFICULTIES[wrapi(at + step * i, 0, Chart.DIFFICULTIES.size())]
+		if song.is_empty() or SongLibrary.has_level(song, level):
+			return level
+	return _difficulty
+
+
+## "E– N– H–", with each difficulty's best grade in place of the dash once it has one.
 func _grades_text(song: Dictionary) -> String:
 	var parts: Array[String] = []
 	for level: String in Chart.DIFFICULTIES:
@@ -473,16 +501,24 @@ func _dial_frequency(index: int, count: int) -> String:
 	return str(int(round(lerpf(540.0, 1600.0, t) / 10.0)) * 10)
 
 
-## The Easy and Normal cards: level, notes and holds, which keys, and what makes it hard.
+## The Easy, Normal and Hard cards: level, notes and holds, which keys, and what makes it hard.
+## A level the song has no chart for (Hard, on charts made before it) is {"available": false}.
+## Three cards share the space two had, so the keys line is short ("10 keys + 12 sharps").
 func _difficulty_cards(song: Dictionary) -> Array:
 	var cards: Array = []
 	var meta: Dictionary = Chart.read_meta(song["path"])
 	var levels: Dictionary = meta.get("difficulties", {})
+	var playing: String = _level_for(song)
 	for level: String in Chart.DIFFICULTIES:
-		var notes: Array = levels.get(level, [])
+		if not SongLibrary.has_level(song, level):
+			cards.append({"name": level.to_upper(), "key": level, "available": false, "level": 0, "notes": 0, "holds": 0,
+				"counts": "", "keys": "", "sharps": 0, "power": 0, "feel": "Not charted yet", "selected": false, "best": ""})
+			continue
+		var notes: Array = levels.get(Chart.resolve_level(meta, level), meta.get("notes", []))
 		var holds: int = 0
 		var reach: bool = false
 		var sharps: int = 0
+		var power_times: Dictionary = {}
 		for n: Dictionary in notes:
 			if float(n["d"]) >= Chart.HOLD_MIN_SECONDS:
 				holds += 1
@@ -490,21 +526,27 @@ func _difficulty_cards(song: Dictionary) -> Array:
 				sharps += 1
 			elif KeyMap.REACH.has(int(n.get("l", 0))):
 				reach = true
+			if int(n.get("pw", 0)) == 1:
+				power_times[snappedf(float(n["t"]), Chart.CHORD_SECONDS)] = true
 		var keys: String = "8 resting keys"
 		if sharps > 0:
-			keys = "10 keys + %d sharp%s on the top row" % [sharps, "" if sharps == 1 else "s"]
+			keys = "10 keys + %d sharp%s" % [sharps, "" if sharps == 1 else "s"]
 		elif reach:
 			keys = "10 keys, adds G and H"
 		var rating: Dictionary = (song.get("ratings", {}) as Dictionary).get(level, {})
-		var reasons: Array = rating.get("reasons", [])
+		var reasons: Array = (rating.get("reasons", []) as Array).duplicate()
+		# Power chords are rare by design (the biggest hits only), so the rating never names them;
+		# the card does, first, since they are the new thing to play.
+		if not power_times.is_empty():
+			reasons = ["power chords"] + reasons.slice(0, 1)
 		var feel: String = "Steady and even"
 		if not reasons.is_empty():
 			feel = ", ".join(reasons)
 			feel = feel.left(1).to_upper() + feel.substr(1)
 		var counts: String = "%d note%s · %d hold%s" % [notes.size(), "" if notes.size() == 1 else "s", holds, "" if holds == 1 else "s"]
-		cards.append({"name": level.to_upper(), "level": Difficulty.level_of(rating), "notes": notes.size(), "holds": holds, "counts": counts,
-			"keys": keys, "sharps": sharps, "feel": feel, "selected": level == _difficulty,
-			"best": str(_save.best_for(song["id"], level).get("grade", ""))})
+		cards.append({"name": level.to_upper(), "key": level, "available": true, "level": Difficulty.level_of(rating),
+			"notes": notes.size(), "holds": holds, "counts": counts, "keys": keys, "sharps": sharps, "power": power_times.size(),
+			"feel": feel, "selected": level == playing, "best": str(_save.best_for(song["id"], level).get("grade", ""))})
 	return cards
 
 
@@ -524,7 +566,10 @@ func _on_route_action(action: String, arg: Variant) -> void:
 				_click()
 				_show_route()
 		"difficulty":
-			if _difficulty != str(arg):
+			var song: Dictionary = _songs[_selected_index()] if not _songs.is_empty() else {}
+			if not song.is_empty() and not SongLibrary.has_level(song, str(arg)):
+				_show_toast("%s is not charted for this song yet." % str(arg).capitalize())
+			elif _level_for(song) != str(arg) or _difficulty != str(arg):
 				_difficulty = str(arg)
 				_click()
 				_show_route()
@@ -560,7 +605,7 @@ func _route_key(code: Key) -> void:
 			_click()
 			_show_route()
 		KEY_TAB:
-			_difficulty = "easy" if _difficulty == "normal" else "normal"
+			_difficulty = _cycle_difficulty(_songs[_selected_index()] if not _songs.is_empty() else {}, 1)
 			_click()
 			_show_route()
 		KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
@@ -751,8 +796,11 @@ func _on_import_finished(chart_path: String) -> void:
 	var meta: Dictionary = Chart.read_meta(chart_path)
 	_select_song_id(str(meta.get("id", "")))
 	var levels: Dictionary = meta.get("difficulties", {})
-	_show_route("Ready: \"%s\", %d notes on Normal, %d on Easy" % [meta.get("title", ""),
-		(levels.get("normal", []) as Array).size(), (levels.get("easy", []) as Array).size()])
+	var ready: String = "Ready: \"%s\", %d notes on Normal, %d on Easy" % [meta.get("title", ""),
+		(levels.get("normal", []) as Array).size(), (levels.get("easy", []) as Array).size()]
+	if Chart.has_level(meta, "hard"):
+		ready += ", %d on Hard" % (levels["hard"] as Array).size()
+	_show_route(ready)
 	print("IMPORTED ", chart_path)
 	if _options.has("import-file"):
 		await get_tree().create_timer(1.0).timeout
@@ -791,7 +839,7 @@ func _start_run(song: Dictionary) -> void:
 	_end_session()
 	_clear_ui()
 	_screen = Screen.PLAYING
-	var chart := Chart.load_file(song["path"], _difficulty)
+	var chart := Chart.load_file(song["path"], _level_for(song))
 	var highway: Highway = _stage.show_chart(chart.theme, chart)
 	_play_ambience(chart.theme)
 	_ambient.volume_db = -18.0

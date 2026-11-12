@@ -38,7 +38,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_load(s)
 	_title_pane(s, m)
 	if not (m["song"] as Dictionary).is_empty():
-		for i: int in 2:
+		for i: int in mini((m["cards"] as Array).size(), CARDS.size()):
 			_card(s, CARDS[i], m["cards"][i])
 		_practice(s, m)
 	_drive(s, m)
@@ -252,25 +252,41 @@ func _clipped_ring(s: RouteScreen, centre: Vector2, radii: Vector2, clip: Rect2,
 			s.draw_line(a, b, color, width, true)
 
 
+## A glass pane per level. Three share the zone two had: name and level on top, the best grade at
+## the end of the feel line (beside the name it ran into it at this width), and the feel line
+## drops its second reason (or ellipsizes) to make room.
 func _card(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
-	var on: bool = card["selected"]
+	var x: float = rect.position.x + 18.0
+	var w: float = rect.size.x - 36.0
 	s.draw_rect(rect, Color(BG, 0.8))
+	if not card.get("available", true):
+		# A station not yet built: faint glass, a dashed edge, no level.
+		box(s, rect, Color(FROST, 0.015), Color.TRANSPARENT, 0.0)
+		dashed_box(s, rect, Color(FROST, 0.28), 1.5, 5.0, 4.0)
+		text(s, Rect2(x, rect.position.y + 14, w, 34), str(card["name"]).capitalize(), font("Outfit", 300), 26, Color(PALE, 0.4))
+		text(s, Rect2(x, rect.position.y + 58, w, 18), "NOT CHARTED YET", font("Azeret Mono"), 11, SAGE)
+		return
+	var on: bool = card["selected"]
 	if on:
 		box(s, rect, Color(MINT, 0.12), MINT, 2.0)
 	else:
 		box(s, rect, Color(FROST, 0.04), Color(FROST, 0.45), 2.0)
-	var x: float = rect.position.x + 20.0
-	var w: float = rect.size.x - 40.0
 	var name: String = str(card["name"]).capitalize()
-	text(s, Rect2(x, rect.position.y + 14, w, 34), name, font("Outfit", 400 if on else 300), 28, MINT if on else PALE)
-	var level_line: String = "LV %d" % int(card["level"])
-	if not str(card["best"]).is_empty():
-		level_line = "BEST %s · LV %d" % [card["best"], int(card["level"])]
-	text(s, Rect2(x, rect.position.y + 14, w, 34), level_line, font("Azeret Mono"), 13, MINT if on else SAGE, HORIZONTAL_ALIGNMENT_RIGHT)
+	text(s, Rect2(x, rect.position.y + 14, w, 34), name, font("Outfit", 400 if on else 300), 26, MINT if on else PALE)
+	text(s, Rect2(x, rect.position.y + 14, w, 34), "LV %d" % int(card["level"]), font("Azeret Mono"), 13, MINT if on else SAGE,
+			HORIZONTAL_ALIGNMENT_RIGHT)
 	text(s, Rect2(x, rect.position.y + 66, w, 20), str(card["counts"]), font("Outfit"), 15,
 			Color.WHITE if on else PALE)
 	text(s, Rect2(x, rect.position.y + 88, w, 18), str(card["keys"]), font("Outfit", 300), 14, MIST if on else SAGE)
-	text(s, Rect2(x, rect.position.y + 108, w, 18), str(card["feel"]), font("Outfit", 300), 14, MIST if on else SAGE)
+	var feel_w: float = w
+	if not str(card["best"]).is_empty():
+		var best: String = "BEST %s" % card["best"]
+		var mono: Font = font("Azeret Mono")
+		text(s, Rect2(x, rect.position.y + 108, w, 18), best, mono, 11, MINT if on else SAGE, HORIZONTAL_ALIGNMENT_RIGHT)
+		feel_w -= text_width(best, mono, 11) + 10.0
+	var feel_font: Font = font("Outfit", 300)
+	text(s, Rect2(x, rect.position.y + 108, feel_w, 18), fit_list(str(card["feel"]), feel_font, 14, feel_w), feel_font, 14,
+			MIST if on else SAGE)
 
 
 func _practice(s: RouteScreen, m: Dictionary) -> void:

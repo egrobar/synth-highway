@@ -52,7 +52,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_load(s)
 	_readout(s, m)
 	if not (m["song"] as Dictionary).is_empty():
-		for i: int in 2:
+		for i: int in mini((m["cards"] as Array).size(), CARDS.size()):
 			_mode(s, CARDS[i], m["cards"][i])
 		_practice(s, m)
 	_drive(s, m)
@@ -306,8 +306,21 @@ func _lit(s: RouteScreen, rect: Rect2, value: String, f: Font, size: int, color:
 
 
 ## A mode button: the chosen one pressed in (sulphur, shadowed at the top), the other raised
-## on its ledge. Name and level, note counts (and the best grade), then keys and feel.
+## on its ledge. Name and level, note counts (and the best grade), then keys and feel. Three
+## share the zone two had, so the stencil is 24 px (28 overran "NORMAL  LV 10") and the feel line
+## drops its second reason (or ellipsizes) to fit.
 func _mode(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
+	if not card.get("available", true):
+		# A mode with no chart behind it yet: a dead key, unlit, no level.
+		_key(s, rect, LOCKED_FACE, STEEL_LEDGE, 6.0, 3.0, 8.0)
+		var stencil: Font = font("Saira Stencil One")
+		var label: Font = font("Oswald", 600, 1.0)
+		var bx: float = rect.position.x + 18.0
+		var bw: float = rect.size.x - 36.0
+		var top: float = rect.position.y + (rect.size.y - 6.0 - _line_h(stencil, 24) - 4.0 - _line_h(label, 13)) * 0.5
+		text(s, Rect2(bx, top, bw, _line_h(stencil, 24)), str(card["name"]), stencil, 24, LOCKED_INK)
+		text(s, Rect2(bx, top + _line_h(stencil, 24) + 4.0, bw, _line_h(label, 13)), "NOT CHARTED YET", label, 13, LOCKED_INK)
+		return
 	var on: bool = card["selected"]
 	if on:
 		box(s, rect, SULPHUR, Color.TRANSPARENT, 0.0, 8.0)
@@ -322,26 +335,28 @@ func _mode(s: RouteScreen, rect: Rect2, card: Dictionary) -> void:
 	var name_font: Font = font("Saira Stencil One")
 	var counts_font: Font = font("Oswald", 600 if on else 500)
 	var small_font: Font = font("Oswald", 500 if on else 400)
-	var heights: Array[float] = [_line_h(name_font, 28), _line_h(counts_font, 15), _line_h(small_font, 13), _line_h(small_font, 13)]
+	var heights: Array[float] = [_line_h(name_font, 24), _line_h(counts_font, 15), _line_h(small_font, 13), _line_h(small_font, 13)]
 	var total: float = heights[0] + heights[1] + heights[2] + heights[3] + 9.0
 	var y: float = rect.position.y + (rect.size.y - total) * 0.5
-	var x: float = rect.position.x + 23.0
-	var w: float = rect.size.x - 46.0
+	var x: float = rect.position.x + 18.0
+	var w: float = rect.size.x - 36.0
 	var name_color: Color = INK if on else LABEL
-	text(s, Rect2(x, y, w, heights[0]), str(card["name"]), name_font, 28, name_color)
-	text(s, Rect2(x, y, w, heights[0]), "LV %d" % int(card["level"]), name_font, 28, name_color, HORIZONTAL_ALIGNMENT_RIGHT)
+	text(s, Rect2(x, y, w, heights[0]), str(card["name"]), name_font, 24, name_color)
+	text(s, Rect2(x, y, w, heights[0]), "LV %d" % int(card["level"]), name_font, 24, name_color, HORIZONTAL_ALIGNMENT_RIGHT)
 	y += heights[0] + 3.0
-	var best: String = str(card["best"])
-	var counts_w: float = w
-	if not best.is_empty():
-		var best_font: Font = font("Oswald", 600, 1.0)
-		text(s, Rect2(x, y, w, heights[1]), "BEST " + best, best_font, 13, INK if on else SULPHUR, HORIZONTAL_ALIGNMENT_RIGHT)
-		counts_w -= text_width("BEST " + best, best_font, 13) + 10.0
-	text(s, Rect2(x, y, counts_w, heights[1]), str(card["counts"]), counts_font, 15, INK if on else BONE)
+	text(s, Rect2(x, y, w, heights[1]), str(card["counts"]), counts_font, 15, INK if on else BONE)
 	y += heights[1] + 3.0
 	text(s, Rect2(x, y, w, heights[2]), str(card["keys"]), small_font, 13, INK if on else DIM)
 	y += heights[2] + 3.0
-	text(s, Rect2(x, y, w, heights[3]), str(card["feel"]), small_font, 13, INK if on else DIM)
+	# The best grade ends the feel line, which gives up its second reason for it (beside the
+	# counts it cut them short on these narrower buttons).
+	var best: String = str(card["best"])
+	var feel_w: float = w
+	if not best.is_empty():
+		var best_font: Font = font("Oswald", 600, 1.0)
+		text(s, Rect2(x, y, w, heights[3]), "BEST " + best, best_font, 13, INK if on else SULPHUR, HORIZONTAL_ALIGNMENT_RIGHT)
+		feel_w -= text_width("BEST " + best, best_font, 13) + 10.0
+	text(s, Rect2(x, y, feel_w, heights[3]), fit_list(str(card["feel"]), small_font, 13, feel_w), small_font, 13, INK if on else DIM)
 
 
 ## Practice: a toggle under a red flip cover. Off, the cover sits closed over it (the design's

@@ -319,7 +319,7 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 
 
 func _hints(s: RouteScreen, m: Dictionary) -> void:
-	var line: String = "← → region    ↑ ↓ station    TAB difficulty    P practice    ENTER drive    ESC menu"
+	var line: String = "← → region    ↑ ↓ station    TAB difficulty    P practice    ENTER drive    M map    " + Ui.back_key() + " menu"
 	if (m["song"] as Dictionary).get("imported", false):
 		line += "    X remove"
 	text(s, Rect2(40, 666, 1200, 18), line, font("Azeret Mono"), 11, SAGE)

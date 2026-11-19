@@ -462,8 +462,9 @@ func _pause() -> void:
 		{"text": "Resume", "key": KEY_SPACE, "key_text": "SPACE", "action": _start_count_in},
 		{"text": "Restart", "key": KEY_R, "key_text": "R", "action": func() -> void: restart_requested.emit()},
 		{"text": "Back to the route", "key": KEY_BACKSPACE, "key_text": "BACKSPACE", "action": func() -> void: quit_to_menu.emit()},
-		{"text": "Quit game", "key": KEY_Q, "key_text": "Q", "action": func() -> void: get_tree().quit()},
 	]
+	if Ui.can_quit():  # in a browser, quitting freezes the page instead of closing it
+		items.append({"text": "Quit game", "key": KEY_Q, "key_text": "Q", "action": func() -> void: get_tree().quit()})
 	_pause_menu = MenuOverlay.new().setup("PAUSED", items, _start_count_in, Ui.ACCENT, HANDS_TEXT,
 		func() -> void: _play(_sfx, "ui"))
 	_hud.add_child(_pause_menu)

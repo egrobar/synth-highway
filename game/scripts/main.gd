@@ -13,7 +13,12 @@ extends Node
 ##
 ## The route screen shows everything at once: a strip of regions along the top,
 ## the selected region's songs in the middle, and the selected song's details on
-## the right. Regions unlock in order: clearing any song in one opens the next.
+## the right.
+##
+## The regions sit on one loop (RouteLoop). A new player picks where to start on the loop map
+## (LoopMap, shown after the title until a start is picked, and on M from the route); clearing
+## two songs in an open region opens the next one clockwise. Until they clear a song, the
+## player can still move their start.
 ##
 ## Options for automated checks, passed after "--" on the command line:
 ##   --bot=perfect|tapper|sloppy|afk  --song=<id>  --difficulty=easy|normal|hard
@@ -22,11 +27,12 @@ extends Node
 ##       and the printed RESULT's "difficulty" says which level actually played.
 ##   --muted                silence output (timing still runs on the real device)
 ##   --shots=DIR [--shot-at=SECONDS]   screenshots during a real-time bot run
-##   --screen=title|route --shot=PATH [--region=<id>] [--song=<id>]   capture a screen and quit
+##   --screen=title|route|map --shot=PATH [--region=<id>] [--song=<id>]   capture a screen and quit
 ##   --import-file=PATH [--import-title=...] [--region=<id>]   run an import without the file picker
 ##   --unlock-all           open every region
+##   --save=NAME            keep progress in user://NAME instead of the player's save.json (tests)
 
-enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS, SETTINGS }
+enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS, SETTINGS, MAP }
 
 ## P on the route steps through these: off, then practice at each speed.
 const PRACTICE_SPEEDS: Array[float] = [0.0, 1.0, 0.85, 0.7]
@@ -84,10 +90,15 @@ var _calib_done: bool = false
 var _toast: Label
 ## The Escape menu on the title and route screens, while it is open.
 var _menu: MenuOverlay
+var _map: LoopMap
+## Where Escape on the loop map goes back to: the title or the route.
+var _map_back: Callable
 
 
 func _ready() -> void:
 	_parse_args()
+	if _options.has("save"):
+		SaveData.path = "user://" + str(_options["save"])
 	_save = SaveData.load_or_new()
 	Settings.apply(_save.settings)
 	# Someone who has never finished a song starts on Easy; Normal ended a first run in seconds.
@@ -95,6 +106,9 @@ func _ready() -> void:
 		_difficulty = "easy"
 	_settings_return = _show_title
 	_load_regions()
+	_adopt_old_progress()
+	if _start_index() >= 0:
+		_region_index = _start_index()
 	_stage = Stage.new()
 	add_child(_stage)
 	_build_audio()
@@ -124,10 +138,13 @@ func _ready() -> void:
 		return
 	if _options.has("song"):
 		_select_song_id(str(_options["song"]))
-	if str(_options.get("screen", "title")) == "route":
-		_show_route()
-	else:
-		_show_title()
+	match str(_options.get("screen", "title")):
+		"route":
+			_show_route()
+		"map":
+			_show_map(_show_title)
+		_:
+			_show_title()
 
 
 func _parse_args() -> void:
@@ -206,6 +223,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not event is InputEventKey or event.echo or not event.pressed:
 		return
 	var code: Key = (event as InputEventKey).physical_keycode
+	# Backspace does what Escape does on every screen here, because in a browser Escape belongs to
+	# the page (Ui.back_key). A run's own keys are play_session.gd's: there Space pauses, and the
+	# pause menu keeps Backspace for "Back to the route".
+	if code == KEY_BACKSPACE:
+		code = KEY_ESCAPE
 	if _menu:
 		_menu.handle_key(code)
 		return
@@ -213,7 +235,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		Screen.TITLE:
 			if code == KEY_SPACE or code == KEY_ENTER:
 				_click()
-				_show_route()
+				# A player who has not picked a start yet sees the loop map first.
+				if _start_index() < 0 and not _options.has("unlock-all"):
+					_show_map(_show_title)
+				else:
+					_show_route()
 			elif code == KEY_S:
 				_click()
 				_open_settings(_show_title)
@@ -221,6 +247,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_open_menu()
 		Screen.ROUTE:
 			_route_key(code)
+		Screen.MAP:
+			_map_key(code)
 		Screen.SETTINGS:
 			_settings_key(code)
 		Screen.CALIBRATE:
@@ -257,6 +285,7 @@ func _clear_ui() -> void:
 	for child: Node in _ui.get_children():
 		child.queue_free()
 	_menu = null
+	_map = null
 	_toast = null
 
 
@@ -267,12 +296,62 @@ func _end_session() -> void:
 
 
 func _region_unlocked(index: int) -> bool:
-	if index <= 0 or _options.has("unlock-all"):
+	if _options.has("unlock-all"):
 		return true
-	for song: Dictionary in SongLibrary.in_region(_regions[index - 1]["id"]):
-		if _save.cleared(song["id"]):
-			return true
-	return false
+	return _open_regions()[index]
+
+
+## Which regions are open on the loop (RouteLoop), by index in _regions.
+func _open_regions() -> Array[bool]:
+	return RouteLoop.open_regions(_regions.size(), _start_index(), _region_clears(), _kept_indexes())
+
+
+## The regions an old save had open (SaveData.route_kept), by index in _regions.
+func _kept_indexes() -> Array[int]:
+	var kept: Array[int] = []
+	for id: String in _save.route_kept:
+		if _region_ids().has(id):
+			kept.append(_region_ids().find(id))
+	return kept
+
+
+## Songs cleared in each region, by index in _regions.
+func _region_clears() -> Array[int]:
+	var clears: Array[int] = []
+	for region: Dictionary in _regions:
+		var count: int = 0
+		for song: Dictionary in SongLibrary.in_region(region["id"]):
+			if _save.cleared(song["id"]):
+				count += 1
+		clears.append(count)
+	return clears
+
+
+## The player's start on the loop, by index in _regions; -1 before they pick one.
+func _start_index() -> int:
+	return _region_ids().find(_save.route_start) if not _save.route_start.is_empty() else -1
+
+
+## A save from before the loop started everyone at the first region and opened the next region
+## on any one clear. It keeps every region it had open, with its start at the first region. Only
+## in memory: it is written with the save's next change, so merely opening the game writes nothing.
+func _adopt_old_progress() -> void:
+	if not _save.route_start.is_empty() or _save.best.is_empty() or _regions.is_empty():
+		return
+	_save.route_start = str(_regions[0]["id"])
+	_save.route_kept.clear()
+	for index: int in RouteLoop.old_chain_open(_regions.size(), _region_clears()):
+		_save.route_kept.append(str(_regions[index]["id"]))
+
+
+## Why a region is locked, for the route's locked notice and the Drive button's toast.
+func _locked_text(index: int) -> String:
+	var count: int = _regions.size()
+	var before: String = str(_regions[(index - 1 + count) % count]["name"])
+	var needs: int = RouteLoop.clears_needed(index, count, _start_index(), _region_clears(), _kept_indexes())
+	if needs > 0:
+		return "Locked: clear %d more song%s in %s to open this road." % [needs, "" if needs == 1 else "s", before]
+	return "Locked: open %s first. Two clears in a region open the next one round the loop (M for the map)." % before
 
 
 func _accent(region: Dictionary) -> Color:
@@ -280,6 +359,8 @@ func _accent(region: Dictionary) -> Color:
 
 
 func _hint(text: String) -> void:
+	# The hints are written with Escape; the web build names Backspace instead (Ui.back_key).
+	text = text.replace("ESC  ", Ui.back_key() + "  ")
 	var hint := Ui.caption(text, 22, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(hint)
@@ -407,6 +488,107 @@ func _show_route(message: String = "") -> void:
 	screen.present(_route_skin(str(region["id"])), _route_model(message))
 
 
+## The loop map (LoopMap): where a new player picks a start, and where anyone sees how far round
+## the loop they have opened. `back` is where Escape goes; `focus` the region to show first.
+func _show_map(back: Callable, focus: int = -1) -> void:
+	_end_session()
+	if focus >= 0:
+		_region_index = focus
+	_clear_ui()
+	_screen = Screen.MAP
+	_map_back = back
+	# Drawn in 2D like the song select: no 3D world behind it. The region's ambience plays.
+	get_viewport().disable_3d = true
+	_play_ambience(_regions[_region_index]["id"])
+	_ambient.volume_db = -9.0
+	_map = LoopMap.new()
+	_map.acted.connect(_on_map_action)
+	_ui.add_child(_map)
+	_map.present(_map_model())
+
+
+## Everything the map draws (the model is documented in LoopMap).
+func _map_model() -> Dictionary:
+	var count: int = _regions.size()
+	var start: int = _start_index()
+	var open: Array[bool] = _open_regions()
+	var clears: Array[int] = _region_clears()
+	var kept: Array[int] = _kept_indexes()
+	var stops: Array = []
+	for i: int in count:
+		var region: Dictionary = _regions[i]
+		stops.append({"id": region["id"], "name": region["name"], "genres": region.get("genres", ""),
+			"blurb": region.get("blurb", ""), "cleared": clears[i], "total": SongLibrary.in_region(region["id"]).size(),
+			# Before a start is picked every stop is drawn open: any of them can be the start.
+			"open": start < 0 or open[i] or _options.has("unlock-all"),
+			"needs": RouteLoop.clears_needed(i, count, start, clears, kept),
+			"prev_name": _regions[(i - 1 + count) % count]["name"], "start": i == start})
+	return {"regions": stops, "focus": _region_index, "picking": _can_pick_start(), "chosen": start >= 0}
+
+
+## A start can be picked, or moved, until the player clears a song.
+func _can_pick_start() -> bool:
+	if _options.has("unlock-all"):
+		return false
+	return _start_index() < 0 or not _region_clears().any(func(c: int) -> bool: return c > 0)
+
+
+func _map_key(code: Key) -> void:
+	match code:
+		KEY_LEFT, KEY_UP:
+			_map_focus(_region_index - 1)
+		KEY_RIGHT, KEY_DOWN:
+			_map_focus(_region_index + 1)
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
+			_map_focus(int(code) - int(KEY_1))
+		KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
+			_map_pick(_region_index)
+		KEY_ESCAPE:
+			_click()
+			_map_back.call()
+
+
+func _on_map_action(action: String, arg: Variant) -> void:
+	match action:
+		"node":
+			if int(arg) == _region_index:
+				_map_pick(int(arg))
+			else:
+				_map_focus(int(arg))
+		"pick":
+			_map_pick(_region_index)
+
+
+func _map_focus(index: int) -> void:
+	var wrapped: int = wrapi(index, 0, _regions.size())
+	if wrapped == _region_index or _map == null:
+		return
+	_region_index = wrapped
+	_click()
+	_play_ambience(_regions[_region_index]["id"])
+	_map.present(_map_model())
+
+
+## Enter on a stop: start there (while a start can be picked), drive it if open, or say why not.
+func _map_pick(index: int) -> void:
+	var region: Dictionary = _regions[index]
+	if _can_pick_start():
+		_save.route_start = str(region["id"])
+		_save.route_kept.clear()
+		_save.write()
+		_region_index = index
+		(_sfx["milestone"] as AudioStreamPlayer).play()
+		var next_name: String = str(_regions[RouteLoop.next(index, _regions.size())]["name"])
+		_show_route("Starting in %s. Clear 2 songs here to open %s." % [region["name"], next_name])
+	elif _region_unlocked(index):
+		_region_index = index
+		_click()
+		_show_route()
+	else:
+		(_sfx["wrong"] as AudioStreamPlayer).play()
+		_show_toast(_locked_text(index))
+
+
 ## Each region's song-select skin (scripts/ui/skins/). A region without one yet borrows Red Frontier's.
 const ROUTE_SKINS := {
 	"backroads": "res://scripts/ui/skins/frontier.gd", "neon": "res://scripts/ui/skins/neon.gd",
@@ -461,7 +643,7 @@ func _route_model(message: String) -> Dictionary:
 		"regions": tabs,
 		"region": {"name": region["name"], "upper": str(region["name"]).to_upper(), "genres": region.get("genres", ""),
 			"blurb": region.get("blurb", ""), "locked": not unlocked,
-			"locked_text": "Locked: clear any song in %s to open this road." % _regions[maxi(_region_index - 1, 0)]["name"]},
+			"locked_text": _locked_text(_region_index)},
 		"rows": rows, "count": _songs.size(), "song": detail, "cards": cards,
 		"practice": {"on": practising, "text": ("%d%% speed" % int(round(PRACTICE_SPEEDS[_practice_step] * 100.0))) if practising else "off"},
 		"locked": not unlocked, "message": message,
@@ -621,6 +803,9 @@ func _route_key(code: Key) -> void:
 			_open_settings(_show_route)
 		KEY_X:
 			_try_remove()
+		KEY_M:
+			_click()
+			_show_map(_show_route, _region_index)
 		KEY_ESCAPE:
 			_open_menu()
 
@@ -632,7 +817,7 @@ func _open_menu() -> void:
 	_click()
 	var back: Callable = _show_title if _screen == Screen.TITLE else _show_route
 	var items: Array[Dictionary] = [
-		{"text": "Resume", "key_text": "ESC", "action": _close_menu},
+		{"text": "Resume", "key_text": Ui.back_key(), "action": _close_menu},
 		{"text": "Settings", "key": KEY_S, "key_text": "S", "action": func() -> void:
 			_close_menu()
 			_open_settings(back)},
@@ -641,7 +826,8 @@ func _open_menu() -> void:
 		items.append({"text": "Title screen", "key": KEY_T, "key_text": "T", "action": func() -> void:
 			_close_menu()
 			_show_title()})
-	items.append({"text": "Quit game", "key": KEY_Q, "key_text": "Q", "action": func() -> void: get_tree().quit()})
+	if Ui.can_quit():
+		items.append({"text": "Quit game", "key": KEY_Q, "key_text": "Q", "action": func() -> void: get_tree().quit()})
 	_menu = MenuOverlay.new().setup("MENU", items, _close_menu, Ui.ACCENT, "", _click)
 	_ui.add_child(_menu)
 
@@ -661,7 +847,7 @@ func _drive_selected() -> void:
 	if _songs.is_empty():
 		return
 	if not _region_unlocked(_region_index):
-		_show_toast("Clear any song in %s first to open %s." % [_regions[_region_index - 1]["name"], _regions[_region_index]["name"]])
+		_show_toast(_locked_text(_region_index))
 		return
 	_click()
 	_start_run(_songs[_selected_index()])
@@ -866,11 +1052,13 @@ func _drive_next() -> void:
 	if at >= 0 and at + 1 < songs.size():
 		_start_run(songs[at + 1])
 		return
+	# On round the loop: after the last region comes the first.
 	var region_at: int = _region_ids().find(_current_song["theme"])
-	if region_at + 1 < _regions.size() and _region_unlocked(region_at + 1):
-		var next_songs: Array[Dictionary] = SongLibrary.in_region(_regions[region_at + 1]["id"])
+	var next_region: int = RouteLoop.next(region_at, _regions.size())
+	if region_at >= 0 and next_region != region_at and _region_unlocked(next_region):
+		var next_songs: Array[Dictionary] = SongLibrary.in_region(_regions[next_region]["id"])
 		if not next_songs.is_empty():
-			_region_index = region_at + 1
+			_region_index = next_region
 			_start_run(next_songs[0])
 			return
 	_show_route("That was the last open song here. Pick another on the route.")
@@ -879,16 +1067,16 @@ func _drive_next() -> void:
 func _on_run_finished(result: Dictionary) -> void:
 	if _options.has("fast"):
 		return
-	var regions_open_before: int = _open_region_count()
+	var open_before: Array[bool] = _open_regions()
 	var new_best: bool = false
 	_last_result = result
 	if not _options.has("bot") and not result.get("practice", false):
 		new_best = _save.record(result)
 	_stage.world.set_target_speed(0.0 if result["failed"] else 0.6)
 	_ambient.volume_db = -9.0
-	var opened_region: bool = _open_region_count() > regions_open_before
+	var opened_region: String = _newly_opened(open_before)
 	# One fanfare, kept for the runs that changed something: a new best or a new road.
-	if new_best or opened_region:
+	if new_best or not opened_region.is_empty():
 		(_sfx["clear"] as AudioStreamPlayer).play()
 	_show_results(result, new_best, opened_region)
 	if _options.has("bot"):
@@ -900,12 +1088,15 @@ func _on_run_finished(result: Dictionary) -> void:
 		get_tree().quit()
 
 
-func _open_region_count() -> int:
-	var open: int = 0
-	for i: int in _regions.size():
-		if _region_unlocked(i):
-			open += 1
-	return open
+## The name of the region this run opened, or "".
+func _newly_opened(open_before: Array[bool]) -> String:
+	if _options.has("unlock-all"):
+		return ""
+	var open_now: Array[bool] = _open_regions()
+	for i: int in open_now.size():
+		if open_now[i] and not open_before[i]:
+			return str(_regions[i]["name"])
+	return ""
 
 
 func _take_due_shots() -> void:
@@ -925,7 +1116,7 @@ func _save_shot(path: String) -> void:
 	get_viewport().get_texture().get_image().save_png(path)
 
 
-func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> void:
+func _show_results(result: Dictionary, new_best: bool, opened_region: String) -> void:
 	_clear_ui()
 	_screen = Screen.RESULTS
 	_ui.add_child(Ui.dim_panel())
@@ -989,8 +1180,8 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: bool) -> v
 	var news: Array[String] = []
 	if new_best:
 		news.append("NEW BEST")
-	if opened_region:
-		news.append("NEW ROAD OPEN ON THE ROUTE")
+	if not opened_region.is_empty():
+		news.append("NEW ROAD OPEN: %s" % opened_region.to_upper())
 	if not news.is_empty():
 		var banner := Ui.label("     ".join(news), 34, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 		Ui.anchor(banner, 0.0, 0.0, 1.0, 0.0, 0, 656, 0, 704, HORIZONTAL_ALIGNMENT_CENTER)

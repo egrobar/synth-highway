@@ -40,3 +40,8 @@ game/assets/songs/**/*.ogg.import
 
 # Suno stems for re-charting the built-in songs (large; kept out of git)
 sources/
+
+# Web release: WASD Engine's web exports, and the web copy of the game with smaller audio that
+# WASD Engine releases (tools/web/make_web_project.py).
+.wasdengine/
+build/

@@ -15,6 +15,21 @@ static var MUTED := Color(0.62, 0.66, 0.8)
 static var ACCENT := Color(0.247, 0.847, 1.0)
 static var WARM := Color(1.0, 0.82, 0.52)
 
+
+## The key that goes back or opens the menu, as the hints and menus name it. In a browser, Escape
+## belongs to the page: WASD Engine's player, like any fullscreen web page, takes it to leave
+## fullscreen, so a player pressing it for the menu dropped out of fullscreen instead (playtest,
+## 2026-11-12). Backspace does everything Escape does outside a run (main.gd), and the web build
+## names it.
+static func back_key() -> String:
+	return "BACKSPACE" if OS.has_feature("web") else "ESC"
+
+
+## False in a browser, where quitting doesn't close the tab: it stops the game on its last frame.
+## The menus leave out "Quit game" there.
+static func can_quit() -> bool:
+	return not OS.has_feature("web")
+
 ## Per region: display / body / mono typefaces as [family, weight]; text, muted, accent and warm
 ## colours; panel and selected-panel fills; border colour and width, selected border colour and
 ## width; corner radius; a hard shadow (offset, colour; none when the colour is clear) under

@@ -6,11 +6,15 @@ extends RefCounted
 ## places that read them: the two audio buses, Highway's note speed and letters,
 ## the window mode, and the `motion` flag the world and camera check.
 ##
-## Audio buses, made at startup by ensure_buses():
+## Audio buses, defined in res://default_bus_layout.tres (Godot loads it at startup):
 ##   Music    the song stems and the region's ambience
 ##   Stems    the two song stems only, feeding Music; it carries the pitch
 ##            correction a slowed-down practice run needs (see set_practice_speed)
 ##   Effects  clicks, hits and other sound effects
+## They used to be made here at runtime with AudioServer.add_bus(), which silenced the web build
+## (WASD Engine release, 2026-11-12): the browser side of Godot's web audio files a bus added at
+## runtime at the wrong index, so the sends below wired Master into a loop with no way out to the
+## speakers. ensure_buses() now only fills in a bus the layout lacks, for tests that run without it.
 
 const DEFAULTS := {"music": 0.8, "effects": 0.8, "note_speed": 1, "letters": true, "motion": true, "fullscreen": false,
 	"graphics": true}

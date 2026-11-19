@@ -463,7 +463,7 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 # ---------------------------------------------------------------- hints and notes
 
 func _hints(s: RouteScreen, m: Dictionary) -> void:
-	var items: Array = [["← →", "REGION"], ["↑ ↓", "SONG"], ["TAB", "DIFFICULTY"], ["P", "PRACTICE"], ["ENTER", "DRIVE"], ["ESC", "MENU"]]
+	var items: Array = [["← →", "REGION"], ["↑ ↓", "SONG"], ["TAB", "DIFFICULTY"], ["P", "PRACTICE"], ["ENTER", "DRIVE"], ["M", "MAP"], [Ui.back_key(), "MENU"]]
 	if (m["song"] as Dictionary).get("imported", false):
 		items.append(["X", "REMOVE"])
 	var f: Font = font("JetBrains Mono", 500)

@@ -22,6 +22,14 @@ extends Node3D
 ## The fx_* helpers below build those effects cheaply: billboard particles, beams and sprites with
 ## their own small shaders, no shadows, kept out of the weathering pass; ride() carries a placed
 ## effect down the road with the scenery.
+##
+## Draw calls and shader compiles (the web build, WASD Engine's web check of 2026-11-19: ~2,100 draws
+## a frame and a 3-5 s freeze at start). All of this runs on the Compatibility renderer only (the web
+## build, and godot_run with web set); desktop (Forward+) is untouched. Rows of repeated props are
+## built one model copy per slot, so a region can light and restyle each copy, and then _batch_rows()
+## draws each row's meshes as a few MultiMeshes (the same look, far fewer draws).
+## _steady_shader_variants() keeps every object's lighting variant fixed, and a ShaderWarmup compiles
+## the world's shaders a few a frame off screen, showing each prop once its shaders are ready.
 
 ## How much faster the scenery runs at full heat. Scenery only: the notes never speed up.
 const HEAT_SPEED := 0.3
@@ -46,6 +54,13 @@ const SURFACE_KEYWORDS: Array = [
 ## Map tiles per metre: one tile of `panel` is four plates across, so 0.33 gives 75 cm plates.
 const SURFACE_SCALE := {"panel": 0.33, "concrete": 0.25, "rock": 0.2, "brushed": 0.5, "grate": 0.8,
 	"corrugated": 0.5, "ice": 0.15, "membrane": 0.6}
+## A row's copies are merged into MultiMeshes covering about this much road each (see _batch_rows()).
+const BATCH_LENGTH := 48.0
+## Off leaves rows as one node per copy: for comparing the look with and without merging.
+static var batch_rows: bool = true
+## Web renderer: the layer unshaded effects are moved to, which only the steady lights reach (see
+## _steady_shader_variants()). 1-based; ShaderWarmup uses 19 and 20.
+const UNLIT_LAYER := 18
 
 var id: String = ""
 var road_half: float = 8.4
@@ -67,6 +82,10 @@ var _headlight_energy: Array[float] = []
 var _headlights: Array[Light3D] = []
 var _wrapped: Array[Dictionary] = []
 var _looped: Array[Dictionary] = []
+## Groups made by repeat() (and row()), merged into MultiMeshes once build() is done.
+var _rows: Array[Node3D] = []
+## Compatibility renderer only: the world's shaders compiling off screen (null once done, or on desktop).
+var _warmup: ShaderWarmup
 var _scrolling_materials: Array[StandardMaterial3D] = []
 var _scrolling_shaders: Array[ShaderMaterial] = []
 var _flicker := RandomNumberGenerator.new()
@@ -89,6 +108,7 @@ var _flow: float = 0.0
 var _target_flow: float = 0.0
 var _faltering: bool = false
 var _riders: Array[Node3D] = []
+var _steady_variants: bool = false
 var _event_players: Array[AudioStreamPlayer] = []
 var _event_sounds: Dictionary = {}
 
@@ -97,6 +117,7 @@ func setup(theme_id: String, half_width: float) -> void:
 	id = theme_id
 	road_half = half_width
 	_flicker.seed = 1987
+	var started: int = Time.get_ticks_msec()
 	build()
 	_weather_props()
 	# The default events' light: off (and skipped by the renderer) until something happens. No shadows.
@@ -104,6 +125,24 @@ func setup(theme_id: String, half_width: float) -> void:
 	_event_light.light_energy = 0.0
 	_event_light.visible = false
 	add_child(_event_light)
+	if compatibility_renderer():
+		# After the weathering pass, so each row's copies are merged with their weathered materials.
+		_batch_rows()
+		_steady_shader_variants()
+		_warmup = ShaderWarmup.new()
+		_warmup.built_ms = Time.get_ticks_msec() - started
+		add_child(_warmup)
+		_warmup.start(self)
+
+
+## True on the Compatibility renderer: the web build (WebGL 2), and godot_run with web set to true.
+static func compatibility_renderer() -> bool:
+	return RenderingServer.get_current_rendering_method() == "gl_compatibility"
+
+
+## Every shader the world draws has compiled (always true on desktop, which never waits).
+func warmed_up() -> bool:
+	return _warmup == null or _warmup.done()
 
 
 ## Override: build the region.
@@ -297,7 +336,8 @@ func _update_swell(delta: float) -> void:
 		_swell = move_toward(_swell, 0.0, delta * (0.3 if calm() else 1.3))
 	if _event_light:
 		_event_light.light_energy = _swell * 0.6
-		_event_light.visible = _swell > 0.004
+		# On the Compatibility renderer it stays on at zero energy (see _steady_shader_variants()).
+		_event_light.visible = _swell > 0.004 or _steady_variants
 
 
 ## Plays this region's audio/event_<name>.wav if it has one, on the effects bus, under the music.
@@ -506,6 +546,7 @@ func fx_sprite(colour: Color, size: float, energy: float, fogged: bool = true) -
 func emissive_materials(prefixes: Array, root: Node = null) -> Array[Dictionary]:
 	var found: Array[Dictionary] = []
 	var seen: Dictionary = {}
+	# Call it in build(): on the web renderer rows become MultiMeshes after build() (_batch_rows()).
 	for node: Node in (root if root else self).find_children("*", "MeshInstance3D", true, false):
 		var mesh: Mesh = (node as MeshInstance3D).mesh
 		if mesh == null:
@@ -773,10 +814,14 @@ func add_light(light: Light3D, energy: float) -> void:
 
 
 ## Instances of one model in a group that wraps every `tile` units: exactly
-## seamless when the positions themselves repeat every `tile`.
+## seamless when the positions themselves repeat every `tile`. During build() each copy is a node
+## of its own (light it, restyle it, attach things to it); after build(), on the web renderer, the
+## copies' meshes are drawn as MultiMeshes (_batch_rows()), so change their materials and visibility
+## in build().
 func repeat(model_path: String, positions: Array[Vector3], tile: float, yaw_degrees: float = 0.0) -> Node3D:
 	var group := Node3D.new()
 	add_child(group)
+	_rows.append(group)
 	var scene: PackedScene = load(model_path)
 	for p: Vector3 in positions:
 		var node: Node3D = scene.instantiate()
@@ -882,6 +927,180 @@ func first_mesh(model_path: String) -> Mesh:
 	var mesh: Mesh = (found[0] as MeshInstance3D).mesh
 	scene.free()
 	return mesh
+
+
+# ---------------------------------------------------------------- draw calls and shader variants
+
+## Compatibility renderer (the web build) only. Merges each row's copies (repeat(), row()) into
+## MultiMeshes: one per mesh, material set and stretch of BATCH_LENGTH metres along the road. The
+## browser build drew ~2,100 meshes a frame (WASD Engine web check, 2026-11-19), mostly row copies,
+## each drawn again in the depth prepass and each shadow split, and a browser spends far longer on a
+## draw call than a desktop driver. The look is the same: same meshes, materials and shadows (checked
+## in Forward+ against unmerged rows: only the animated sea and lava differed). Desktop skips it:
+## Forward+ already draws a row's identical copies together, and merged chunks drew more there (Ring
+## Road 316 to 512). A row is chunked rather than merged whole so stretches out of
+## view or past the shadow range are still culled, and so each chunk is lit by the few lamps along
+## it (the Compatibility renderer lights an object by at most 8 omni lights, picked in no order).
+## The copies stay, with anything a region attached to them (the lamps' light pools, the river's
+## glows); only their meshes go. Rows with animation or skeletons are left as they are.
+func _batch_rows() -> void:
+	if not batch_rows:
+		return
+	for group: Node3D in _rows:
+		if not is_instance_valid(group):
+			continue
+		if not group.find_children("*", "AnimationMixer", true, false).is_empty() \
+				or not group.find_children("*", "Skeleton3D", true, false).is_empty():
+			continue
+		var batches: Dictionary = {}
+		var merged: Array[MeshInstance3D] = []
+		for node: Node in group.find_children("*", "MeshInstance3D", true, false):
+			var instance := node as MeshInstance3D
+			if instance.mesh == null or not instance.visible or instance.skin != null or instance.top_level:
+				continue
+			# Where the mesh sits in the group: the copy's placement times the model's own nesting.
+			var place: Transform3D = instance.transform
+			var parent: Node = instance.get_parent()
+			while parent != group:
+				place = (parent as Node3D).transform * place
+				parent = parent.get_parent()
+			var materials: PackedStringArray = []
+			for s: int in instance.mesh.get_surface_count():
+				var mat: Material = instance.get_active_material(s)
+				materials.append(str(mat.get_instance_id()) if mat else "-")
+			var overlay: int = instance.material_overlay.get_instance_id() if instance.material_overlay else 0
+			var kind: String = "%d|%s|%d|%d|%s|%d" % [instance.mesh.get_instance_id(), ",".join(materials),
+				instance.cast_shadow, instance.layers, str(instance.transparency), overlay]
+			var key: String = "%s|%d" % [kind, floori(place.origin.z / BATCH_LENGTH)]
+			if not batches.has(key):
+				batches[key] = {"template": instance, "kind": kind, "places": []}
+			(batches[key]["places"] as Array).append(place)
+			merged.append(instance)
+		var meshes: Dictionary = {}
+		for key: String in batches:
+			var batch: Dictionary = batches[key]
+			var template: MeshInstance3D = batch["template"]
+			if not meshes.has(batch["kind"]):
+				meshes[batch["kind"]] = _batch_mesh(template)
+			var places: Array = batch["places"]
+			# Far to near: a MultiMesh's copies are drawn in order, which matters for see-through surfaces.
+			places.sort_custom(func(a: Transform3D, b: Transform3D) -> bool: return a.origin.z < b.origin.z)
+			var multi := MultiMesh.new()
+			multi.transform_format = MultiMesh.TRANSFORM_3D
+			multi.mesh = meshes[batch["kind"]]
+			multi.instance_count = places.size()
+			for i: int in places.size():
+				multi.set_instance_transform(i, places[i])
+			var batched := MultiMeshInstance3D.new()
+			batched.multimesh = multi
+			batched.material_override = template.material_override
+			batched.material_overlay = template.material_overlay
+			batched.cast_shadow = template.cast_shadow
+			batched.layers = template.layers
+			batched.transparency = template.transparency
+			group.add_child(batched)
+		for instance: MeshInstance3D in merged:
+			if instance.get_child_count() > 0:
+				instance.mesh = null  # still carries what a region attached to it
+			else:
+				instance.get_parent().remove_child(instance)
+				instance.free()
+
+
+## The mesh a row's MultiMesh draws: the copies' own mesh, or a duplicate carrying the materials the
+## copies were given per surface (weathering, a region's restyling), as a MultiMesh has no per-surface
+## override.
+func _batch_mesh(template: MeshInstance3D) -> Mesh:
+	var mesh: Mesh = template.mesh
+	if template.material_override:
+		return mesh
+	var copy: Mesh = null
+	for s: int in mesh.get_surface_count():
+		var own: Material = template.get_surface_override_material(s)
+		if own and own != mesh.surface_get_material(s):
+			if copy == null:
+				copy = mesh.duplicate()
+			copy.surface_set_material(s, own)
+	return copy if copy else mesh
+
+
+## Compatibility renderer (the web build) only. It compiles a shader variant per material for each
+## mix of lights an object has: an omni light in reach or not, a spot light in reach or not, an
+## unshadowed directional light or not. As the road scrolls, props come into and out of reach of the
+## lamps and the headlights, and the event light came on with the first milestone, so variants kept
+## compiling mid-song: a hitch of 30-100 ms each in a browser (24 of them in a minute of Neon Sprawl),
+## and the first milestone's flash needed one for nearly every material. An omni and a spot light of
+## zero energy that reach everything, and the event light kept on at zero energy, give every object
+## the same variant all the time; ShaderWarmup compiles those once, before the world is shown.
+## Zero energy adds no light. Desktop (Forward+) has no such variants and never runs this.
+func _steady_shader_variants() -> void:
+	_steady_variants = true
+	_event_light.visible = true
+	var omni := OmniLight3D.new()
+	omni.omni_range = 4096.0
+	omni.light_energy = 0.0
+	omni.light_specular = 0.0
+	omni.position = Vector3(0.0, 9.0, 14.0)
+	add_child(omni)
+	# Behind the camera, facing down the road, so its cone takes in everything the camera sees (and
+	# ShaderWarmup's stage, far below the road).
+	var spot := SpotLight3D.new()
+	spot.spot_range = 4096.0
+	spot.spot_angle = 89.9
+	spot.light_energy = 0.0
+	spot.light_specular = 0.0
+	spot.position = Vector3(0.0, 9.0, 60.0)
+	add_child(spot)
+	# Unshaded effects (sparks, glows, beams, smoke) ignore light, but an object in reach of more
+	# than 8 omni lights is given the first 8 in no particular order, and the steady light is not
+	# always among them: Io Burn's eruptions compiled a second variant at the first milestone. On a
+	# layer of their own that only the steady lights reach, they keep one variant. Cameras draw it.
+	var unlit: int = 1 << (UNLIT_LAYER - 1)
+	for node: Node in find_children("*", "GeometryInstance3D", true, false):
+		if _unshaded_only(node as GeometryInstance3D):
+			(node as GeometryInstance3D).layers = unlit
+	for node: Node in find_children("*", "Light3D", true, false):
+		if node != omni and node != spot and not (node is DirectionalLight3D):
+			(node as Light3D).light_cull_mask &= ~unlit
+
+
+## True when everything the node draws is unshaded (lights change nothing about how it looks).
+func _unshaded_only(node: GeometryInstance3D) -> bool:
+	var materials: Array[Material] = []
+	if node.material_override:
+		materials.append(node.material_override)
+	else:
+		var mesh: Mesh = null
+		if node is MeshInstance3D:
+			mesh = (node as MeshInstance3D).mesh
+		elif node is MultiMeshInstance3D and (node as MultiMeshInstance3D).multimesh:
+			mesh = (node as MultiMeshInstance3D).multimesh.mesh
+		elif node is CPUParticles3D:
+			mesh = (node as CPUParticles3D).mesh
+		if mesh == null:
+			return false
+		for s: int in mesh.get_surface_count():
+			var mat: Material = (node as MeshInstance3D).get_active_material(s) if node is MeshInstance3D \
+				else mesh.surface_get_material(s)
+			if mat == null:
+				return false
+			materials.append(mat)
+	if materials.is_empty():
+		return false
+	for mat: Material in materials:
+		if mat is BaseMaterial3D:
+			if (mat as BaseMaterial3D).shading_mode != BaseMaterial3D.SHADING_MODE_UNSHADED:
+				return false
+		elif mat is ShaderMaterial and (mat as ShaderMaterial).shader:
+			var code: String = (mat as ShaderMaterial).shader.code
+			var at: int = code.find("render_mode")
+			if at < 0 or not code.substr(at, code.find(";", at) - at).contains("unshaded"):
+				return false
+		else:
+			return false
+		if mat.next_pass:
+			return false
+	return true
 
 
 # ---------------------------------------------------------------- weathering

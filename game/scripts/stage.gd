@@ -9,6 +9,13 @@ extends Node3D
 ## The camera leans into a good run: the view opens a little as the combo's heat
 ## rises, and a miss gives it a short jolt. Both are small on purpose, because the
 ## player is reading notes through this camera.
+##
+## On the Compatibility renderer (the web build) the first world of a session is built two
+## frames after the menus first show, and that frame is drawn with the 3D view off: the
+## engine's start-up, the world's build (~350 ms in a browser) and the first compile of the
+## sky, glow and tone-mapping shaders (~0.5 s on a cold browser cache) then each get a frame
+## of their own, where together they froze the start for 1-5 s (WASD Engine web check,
+## 2026-11-19). The world's own shaders compile a few a frame after that (ShaderWarmup).
 
 const CAMERA_POSITION := Vector3(0.0, 8.8, 13.6)  # high enough that the hood frames the bottom edge
 const CAMERA_TARGET := Vector3(0.0, 1.0, -12.0)
@@ -23,6 +30,11 @@ var theme_id: String = ""
 var camera: Camera3D
 var _jolt: float = 0.0
 var _jolt_rng := RandomNumberGenerator.new()
+## Web renderer: the first region, [id, half width], waiting to be built, and the frames left to wait.
+var _first_region: Array = []
+var _first_region_wait: int = 2
+## Web renderer: the 3D view is off for the frame the first world was built in.
+var _view_off: bool = false
 
 
 func _ready() -> void:
@@ -30,9 +42,25 @@ func _ready() -> void:
 	camera.fov = BASE_FOV
 	add_child(camera)
 	camera.look_at_from_position(CAMERA_POSITION, CAMERA_TARGET)
+	if ThemeWorld.compatibility_renderer():
+		# What shows behind the menus until the first world is built: night, not the default grey.
+		RenderingServer.set_default_clear_color(Color(0.02, 0.02, 0.05))
 
 
 func _process(delta: float) -> void:
+	if _view_off:
+		_view_off = false
+		camera.make_current()
+	if not _first_region.is_empty():
+		# Not on the first frame: a browser runs Godot's first frame in the same task as its start-up,
+		# so only from the second on does a frame reach the screen before the next one starts.
+		_first_region_wait -= 1
+		if _first_region_wait <= 0:
+			var region: Array = _first_region
+			_first_region = []
+			_ensure_world(region[0], region[1])
+			camera.current = false
+			_view_off = true
 	var heat: float = world.heat() if world else 0.0
 	camera.fov = BASE_FOV + HEAT_FOV * heat
 	_jolt = maxf(_jolt - delta * 5.0, 0.0)
@@ -53,16 +81,30 @@ func show_region(id: String) -> void:
 	if highway:
 		highway.queue_free()
 		highway = null
+	# Web renderer, nothing built yet: build it shortly (see the header). Nothing reads `world`
+	# outside a drive, and show_chart() builds at once.
+	if world == null and ThemeWorld.compatibility_renderer():
+		_first_region = [id, MENU_HALF_WIDTH]
+		return
 	_ensure_world(id, MENU_HALF_WIDTH)
 
 
 ## Shows a region set up for one chart: keyboard sized to the song, road to match.
 func show_chart(id: String, chart: Chart) -> Highway:
+	_first_region = []
 	if highway:
 		highway.queue_free()
 	highway = Highway.new()
 	add_child(highway)
 	highway.setup(chart)
+	if ThemeWorld.compatibility_renderer():
+		# The keys show at once; the notes' and hit effects' materials compile over the next frames,
+		# before the first notes arrive, instead of mid-song (ShaderWarmup.prewarm()).
+		var warm := ShaderWarmup.new()
+		# Ahead of a world warming up at the same time (one warm-up works a frame): notes come first.
+		warm.process_priority = -1
+		add_child(warm)
+		warm.prewarm(highway)
 	_ensure_world(id, highway.half_width() + 1.7)
 	return highway
 

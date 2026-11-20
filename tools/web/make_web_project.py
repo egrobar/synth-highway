@@ -11,11 +11,15 @@ A re-run copies what changed in game/ and re-encodes only the stems whose source
 their web copy; the copy's own .godot import cache and .wasdengine folder are kept. Release from
 build/web_project/ every time, never from game/ (game/ is too big to release).
 
+It also writes the copy's .wasdengine/credits.json, the "made with" list a release puts on the game's
+WASD Engine page (CREDIT_TOOLS, CREDIT_MODELS below).
+
 Usage: .venv-pipeline/bin/python tools/web/make_web_project.py
-Then:  WASD Engine's wasd_release_game with project = <repo>/build/web_project
+Then:  WASD Engine's wasd_release_game with project = <repo>/build/web_project, model = "Claude Opus 5.5"
 """
 from __future__ import annotations
 
+import json
 import pathlib
 import shutil
 import subprocess
@@ -30,6 +34,17 @@ OUT = ROOT / "build/web_project"
 LEVEL = 0.75
 STEMS = ("lead", "backing")
 WORKERS = 3  # this Mac runs one heavy job at a time; three encoders stay well under a GB
+
+# What the game's WASD Engine page credits. WASD Engine only records a tool when one of its own MCP tools
+# works on the project, and this game's assets come from the repo's scripts (tools/build_assets.sh), so
+# the first two releases credited Godot alone. Blender builds the region props (tools/themes/*/props.py),
+# GIMP paints the textures and UI art (tools/gimp/, tools/themes/*/textures.py), and SuperCollider renders
+# the authored songs, ambience and sound effects (tools/song/, tools/themes/*/*.scd). A release keeps only
+# the tool ids WASD Engine knows: godot, blender, gimp, supercollider, elevenlabs, nano-banana, polyhaven.
+CREDIT_TOOLS = ("godot", "blender", "gimp", "supercollider")
+# The AI models: Claude wrote the game, Suno made the station songs, and Demucs (htdemucs) split their
+# mixes into the stems the charts are built from (tools/importer/demucs_stems.py). A release keeps the last six.
+CREDIT_MODELS = ("Claude Opus 5.5", "Suno", "Demucs")
 
 
 def sync() -> None:
@@ -87,8 +102,29 @@ def point_charts_at_ogg() -> int:
     return changed
 
 
+def credit() -> list[str]:
+    """Adds CREDIT_TOOLS and CREDIT_MODELS to the copy's credits file, keeping what WASD Engine recorded there
+    itself (its tools' calls, and the model a release names). The sync never touches .wasdengine/."""
+    path = OUT / ".wasdengine/credits.json"
+    try:
+        current = json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        current = {}
+    models = [m for m in current.get("models", []) if isinstance(m, dict)]
+    for name in CREDIT_MODELS:
+        if not any(str(m.get("name", "")).lower() == name.lower() for m in models):
+            models.append({"name": name})
+    tools = [t for t in current.get("tools", []) if isinstance(t, str)]
+    tools += [t for t in CREDIT_TOOLS if t not in tools]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Format 1 is the only one WASD Engine reads; a file in any other format credits nothing.
+    path.write_text(json.dumps({"format": 1, "models": models[-6:], "tools": tools}, indent=2) + "\n")
+    return [str(m.get("name", "WASD Engine's built-in AI")) for m in models[-6:]] + tools
+
+
 def main() -> None:
     sync()
+    print("credits: " + ", ".join(credit()), flush=True)
     jobs = stale_stems()
     print(f"encoding {len(jobs)} stems at compression {LEVEL}", flush=True)
     with ProcessPoolExecutor(WORKERS) as pool:

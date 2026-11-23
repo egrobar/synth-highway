@@ -57,7 +57,8 @@ func present(model: Dictionary) -> void:
 	Ui.anchor(logo, 0.5, 0.0, 0.5, 0.0, -470, 60, 470, 260)
 	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(logo)
-	var line := Ui.label("A night drive in five regions, played on your keyboard's home row.", 30, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	var line := Ui.shrink_to_fit(Ui.label("A night drive in five regions, played on your keyboard's home row.", 30, Ui.TEXT,
+		HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 18)
 	Ui.anchor(line, 0.0, 0.0, 1.0, 0.0, 0, 266, 0, 310, HORIZONTAL_ALIGNMENT_CENTER)
 	add_child(line)
 	var drive: Dictionary = model.get("drive", {})
@@ -76,8 +77,8 @@ func present(model: Dictionary) -> void:
 		_small_button(str(buttons[i][0]), x, button_w, str(buttons[i][1]), str(buttons[i][2]))
 		bottom_row.append(str(buttons[i][0]))
 	_grid = [["drive", "battle"], bottom_row]
-	var hint := Ui.caption("ARROWS  choose        ENTER  select        %s  menu" % Ui.back_key(), 22, Ui.ACCENT,
-		HORIZONTAL_ALIGNMENT_CENTER)
+	var hint := Ui.shrink_to_fit(Ui.caption("ARROWS  choose        ENTER  select        %s  menu" % Ui.back_key(), 22, Ui.ACCENT,
+		HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 15)
 	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	add_child(hint)
 	_refresh()

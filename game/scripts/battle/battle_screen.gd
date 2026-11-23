@@ -41,6 +41,8 @@ func _ready() -> void:
 
 
 func present(model: Dictionary) -> void:
+	# What the player had typed in the code box survives a redraw (a sign-in finishing, a message).
+	var typed: String = _input.text if _input else ""
 	if _content:
 		_content.queue_free()
 	_input = null
@@ -57,6 +59,9 @@ func present(model: Dictionary) -> void:
 			_draw_lobby(model)
 		"standings":
 			_draw_standings(model)
+	if _input and not typed.is_empty():
+		_input.text = typed
+		_input.caret_column = typed.length()
 
 
 func has_input_focus() -> bool:
@@ -87,10 +92,10 @@ func _draw_connect(model: Dictionary) -> void:
 		var key := Ui.heading(str(rows[i][0]), 46, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 		Ui.anchor(key, 0.0, 0.0, 0.0, 1.0, 10, 14, 90, -14, HORIZONTAL_ALIGNMENT_CENTER)
 		card.add_child(key)
-		var name := Ui.label(str(rows[i][1]), 32, Ui.TEXT)
+		var name := Ui.shrink_to_fit(Ui.label(str(rows[i][1]), 32, Ui.TEXT), 720.0)
 		Ui.anchor(name, 0.0, 0.0, 1.0, 0.0, 100, 12, -20, 52)
 		card.add_child(name)
-		var note := Ui.label(str(rows[i][2]), 21, Ui.MUTED)
+		var note := Ui.shrink_to_fit(Ui.label(str(rows[i][2]), 21, Ui.MUTED), 720.0, 15)
 		Ui.anchor(note, 0.0, 0.0, 1.0, 0.0, 100, 54, -20, 84)
 		card.add_child(note)
 	if rows.is_empty():
@@ -160,6 +165,7 @@ func _draw_lobby(model: Dictionary) -> void:
 		_content.add_child(seat)
 		var tag := Ui.caption("SEAT %d%s%s" % [i + 1, "  ·  HOST" if bool(slot.get("host", false)) else "",
 			"  ·  YOU" if bool(slot.get("me", false)) else ""], 17, Ui.ACCENT if not empty else Ui.MUTED)
+		Ui.shrink_to_fit(tag, seat_w - 40.0, 12)
 		Ui.anchor(tag, 0.0, 0.0, 1.0, 0.0, 20, 14, -20, 36)
 		seat.add_child(tag)
 		var name := Ui.heading("open seat" if empty else str(slot.get("name", "")), 32, Ui.TEXT if not empty else Ui.MUTED)
@@ -213,7 +219,7 @@ func _draw_lobby(model: Dictionary) -> void:
 		var key := Ui.caption(str(buttons[i][0]), 20, Ui.ACCENT)
 		Ui.anchor(key, 0.0, 0.0, 0.0, 1.0, 18, 20, 110, -18)
 		button.add_child(key)
-		var label := Ui.label(str(buttons[i][1]), 28, Ui.TEXT)
+		var label := Ui.shrink_to_fit(Ui.label(str(buttons[i][1]), 28, Ui.TEXT), button_w - 120.0, 18)
 		Ui.anchor(label, 0.0, 0.0, 1.0, 1.0, 104, 12, -16, -12)
 		button.add_child(label)
 	var note: String = str(model.get("draw_note", ""))
@@ -239,7 +245,9 @@ func _draw_standings(model: Dictionary) -> void:
 	_content.add_child(Ui.dim_panel(0.7))
 	_back_button("Leave")
 	var final: bool = bool(model.get("final", false))
-	var heading := Ui.heading(str(model.get("headline", "")), 76, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	# A long winner's name ("EVANGELINE ROBERTSON WINS") steps down to stay clear of the Leave button.
+	var heading := Ui.shrink_to_fit(Ui.heading(str(model.get("headline", "")), 76, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER),
+		Ui.DESIGN_WIDTH - 2.0 * 280.0, 40)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 60, 0, 150, HORIZONTAL_ALIGNMENT_CENTER)
 	_content.add_child(heading)
 	_line("FINAL STANDINGS" if final else "STILL DRIVING: THE ORDER SO FAR", 156.0, 22, Ui.MUTED)
@@ -261,7 +269,7 @@ func _draw_standings(model: Dictionary) -> void:
 		name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		Ui.anchor(name, 0.0, 0.0, 0.0, 0.0, 160, 10, 640, 56)
 		card.add_child(name)
-		var detail := Ui.label(str(row.get("detail", "")), 22, Ui.MUTED)
+		var detail := Ui.shrink_to_fit(Ui.label(str(row.get("detail", "")), 22, Ui.MUTED), 580.0, 15)
 		Ui.anchor(detail, 0.0, 0.0, 0.0, 0.0, 160, 56, 760, 86)
 		card.add_child(detail)
 		var score := Ui.heading(RivalBar._num(int(row.get("score", 0))), 50, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
@@ -301,7 +309,9 @@ func play_reveal(titles: Array, chosen: int, title: String, subtitle: String, se
 	var level := Ui.heading("", 34, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(level, 0.0, 0.5, 1.0, 0.5, 0, 30, 0, 80, HORIZONTAL_ALIGNMENT_CENTER)
 	_reveal.add_child(level)
-	var ready := Ui.label("", 30, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	var ready := Ui.label("Hands on the home row. Get ready to race.", 30, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.shrink_to_fit(ready, Ui.DESIGN_WIDTH - 80.0)
+	ready.text = ""
 	Ui.anchor(ready, 0.0, 0.5, 1.0, 0.5, 0, 96, 0, 140, HORIZONTAL_ALIGNMENT_CENTER)
 	_reveal.add_child(ready)
 	# One title per tick, the ticks stretching out, so the spin lands on the drawn song when its
@@ -348,13 +358,18 @@ func _steps(top: float) -> void:
 	Ui.anchor(band, 0.5, 0.0, 0.5, 0.0, left - 26, top - 8, -left + 26, top + 62)
 	band.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_content.add_child(band)
+	# One size for all three, the size the longest fits at, so the band reads evenly.
+	var step_size: int = 24
+	for step: String in steps:
+		step_size = mini(step_size, Ui.shrink_to_fit(Ui.label(step, 24, Ui.TEXT), step_w - 56.0, 15).get_theme_font_size("font_size"))
 	for i: int in steps.size():
 		var x: float = left + i * (step_w + gap)
 		var number := Ui.heading(str(i + 1), 40, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 		Ui.anchor(number, 0.5, 0.0, 0.5, 0.0, x, top, x + 44, top + 54, HORIZONTAL_ALIGNMENT_CENTER)
 		_content.add_child(number)
-		var text := Ui.label(steps[i], 24, Ui.TEXT)
-		Ui.anchor(text, 0.5, 0.0, 0.5, 0.0, x + 52, top + 10, x + step_w, top + 48)
+		var text := Ui.label(steps[i], step_size, Ui.TEXT)
+		text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		Ui.anchor(text, 0.5, 0.0, 0.5, 0.0, x + 52, top + 6, x + step_w, top + 50)
 		_content.add_child(text)
 		if i < steps.size() - 1:
 			var arrow := Ui.caption("›", 34, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
@@ -391,7 +406,10 @@ func _copy_button(at: Vector2) -> void:
 	key.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	Ui.anchor(key, 0.0, 0.0, 0.0, 1.0, 16, 0, 40, 0)
 	button.add_child(key)
-	_copy_label = Ui.label("Copied" if Time.get_ticks_msec() < _copied_until else "Copy", 24, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
+	# Sized for "Copied", the longer of its two words, so it doesn't jump when it changes.
+	_copy_label = Ui.label("Copied", 24, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
+	Ui.shrink_to_fit(_copy_label, 92.0, 16)
+	_copy_label.text = "Copied" if Time.get_ticks_msec() < _copied_until else "Copy"
 	_copy_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	Ui.anchor(_copy_label, 0.0, 0.0, 1.0, 1.0, 40, 0, -18, 0, HORIZONTAL_ALIGNMENT_RIGHT)
 	button.add_child(_copy_label)
@@ -412,13 +430,14 @@ func _back_button(text: String) -> void:
 
 
 func _line(text: String, top: float, size: int, color: Color) -> void:
-	var label := Ui.label(text, size, color, HORIZONTAL_ALIGNMENT_CENTER)
+	var label := Ui.shrink_to_fit(Ui.label(text, size, color, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 16)
 	Ui.anchor(label, 0.0, 0.0, 1.0, 0.0, 40, top, -40, top + size + 14, HORIZONTAL_ALIGNMENT_CENTER)
 	_content.add_child(label)
 
 
 func _hint(text: String) -> void:
-	var hint := Ui.caption(text.replace("ESC  ", Ui.back_key() + "  "), 22, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+	var hint := Ui.shrink_to_fit(Ui.caption(text.replace("ESC  ", Ui.back_key() + "  "), 22, Ui.ACCENT,
+		HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 15)
 	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	_content.add_child(hint)
 

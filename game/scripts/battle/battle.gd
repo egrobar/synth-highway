@@ -116,17 +116,82 @@ func me() -> int:
 
 
 ## Hosts a WASD lobby. Call from a key press or click: a browser opens WASD's sign-in only after one.
-func host_online() -> Dictionary:
+## Where a player who isn't signed in to WASD can sign in, when the WASD page said: main.gd opens it
+## on the next Host or Join press (a browser opens a new tab only right after a key press or click).
+var sign_in_url: String = ""
+
+## What each of the add-on's failures means for a player, by its error code. Its own messages are
+## written for the game's developer ("Sign in first: call sign_in() from a button press", shown raw
+## to a player in v6's lobby; playtest 2026-11-23). %s is the key that tries again.
+const PLAYER_MESSAGES := {
+	"signed_out": "Sign in to WASD Engine to battle online, then press %s again.",
+	"sign_in_expired": "Your WASD sign-in ran out. Sign in again, then press %s again.",
+	"popup_blocked": "Your browser blocked the WASD sign-in window. Allow pop-ups for this page, then press %s again.",
+	"cancelled": "The sign-in window closed before you signed in. Press %s to try again.",
+	"timeout": "The connection didn't open in time. A strict network or firewall may be blocking it. Press %s to try again.",
+	"invalid_token": "WASD sign-in didn't work for this game. Reload the page, then press %s again.",
+	"sign_in_unavailable": "Online battles are in the browser version on WASD Engine.",
+	"no_game_id": "Online battles are in the browser version on WASD Engine.",
+	"webrtc_unavailable": "Online battles are in the browser version on WASD Engine.",
+	"busy": "Still connecting: give it a moment.",
+	"signal_failed": "Can't reach WASD's lobby service right now. Press %s to try again in a moment.",
+	"connection_failed": "Couldn't connect. A strict network or firewall may be blocking it. Press %s to try again.",
+}
+
+
+## Signs the player in to WASD before an online battle. The add-on's host_lobby and join_lobby ask the
+## WASD page for a sign-in only once they have heard from it, so without this a first Host failed.
+## Call it from the Host or Join key press or click: away from a WASD game page the sign-in opens a
+## window, which browsers allow only then. `again` is the key the failure message says to press.
+func sign_in_online(again: String) -> Dictionary:
 	if _wasd() == null:
 		return {"ok": false, "message": "Online battles aren't set up in this build."}
+	var result: Dictionary = await _wasd().sign_in()
+	if result.get("ok", false):
+		sign_in_url = ""
+		return result
+	sign_in_url = str(result.get("sign_in_url", ""))
+	# The add-on's "timeout" also means a connection that didn't open; here it is the sign-in's.
+	var failed: Dictionary = {"ok": false, "message": "WASD sign-in didn't answer. Press %s to try again." % again
+		if str(result.get("error", "")) == "timeout" else player_message(result, again)}
+	if not sign_in_url.is_empty() and str(result.get("error", "")) == "signed_out":
+		failed["message"] = "Sign in to WASD Engine to battle online: press %s to sign in, then come back and press %s." \
+			% [again, again]
+	return failed
+
+
+## A failure from the add-on as a sentence for a player (PLAYER_MESSAGES); a failure it doesn't know
+## keeps the add-on's own text unless that text is talking to a developer.
+static func player_message(result: Dictionary, again: String) -> String:
+	var code: String = str(result.get("error", ""))
+	if PLAYER_MESSAGES.has(code):
+		var text: String = PLAYER_MESSAGES[code]
+		return text % again if text.contains("%s") else text
+	var raw: String = str(result.get("message", ""))
+	if raw.is_empty() or raw.contains("()") or raw.contains("call "):
+		return "Couldn't start the online battle (%s). Press %s to try again." % [code if not code.is_empty() else "error", again]
+	return raw
+
+
+func host_online() -> Dictionary:
+	var signed: Dictionary = await sign_in_online("H")
+	if not signed.get("ok", false):
+		return signed
 	var name: String = str(_wasd().player().get("name", "Driver"))
-	return await _wasd().host_lobby({"max_players": MAX_PLAYERS, "public": false, "name": "%s's battle" % name})
+	var result: Dictionary = await _wasd().host_lobby({"max_players": MAX_PLAYERS, "public": false, "name": "%s's battle" % name})
+	if not result.get("ok", false):
+		result["message"] = player_message(result, "H")
+	return result
 
 
 func join_online(code: String) -> Dictionary:
-	if _wasd() == null:
-		return {"ok": false, "message": "Online battles aren't set up in this build."}
-	return await _wasd().join_lobby(code.strip_edges().to_upper())
+	var signed: Dictionary = await sign_in_online("ENTER")
+	if not signed.get("ok", false):
+		return signed
+	var result: Dictionary = await _wasd().join_lobby(code.strip_edges().to_upper())
+	if not result.get("ok", false):
+		result["message"] = player_message(result, "ENTER")
+	return result
 
 
 ## LAN host (desktop). ENet is made by name: naming the class would stop this script loading on the web.

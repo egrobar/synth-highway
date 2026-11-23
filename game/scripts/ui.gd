@@ -114,6 +114,24 @@ static func _label(text: String, size: int, color: Color, align: HorizontalAlign
 	return node
 
 
+## Steps a label's font size down until its text fits `width` on one line, no smaller than
+## `min_size`. The regions' typefaces differ a lot in width (Tidewater's Manrope runs about a fifth
+## wider than Red Frontier's Oswald), and lines laid out in one ran past their panels in another
+## (playtest, 2026-11-23). Works before the label is in the tree: its font is an override.
+static func shrink_to_fit(node: Label, width: float, min_size: int = 14) -> Label:
+	var face: Font = node.get_theme_font("font")
+	var size: int = node.get_theme_font_size("font_size")
+	while size > min_size and face.get_string_size(node.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x > width:
+		size -= 1
+	node.add_theme_font_size_override("font_size", size)
+	return node
+
+
+## The narrowest the screen gets in design pixels: the stretch keeps at least 1600 x 900 and only ever
+## adds room, so a full-width line fits this, less its margins.
+const DESIGN_WIDTH := 1600.0
+
+
 ## Places a control by anchors and pixel offsets. Passing an alignment also sets a label's.
 static func anchor(control: Control, left: float, top: float, right: float, bottom: float, offset_left: float,
 		offset_top: float, offset_right: float, offset_bottom: float, align: int = -1) -> void:

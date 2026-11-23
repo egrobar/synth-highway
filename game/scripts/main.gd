@@ -462,7 +462,7 @@ func _accent(region: Dictionary) -> Color:
 func _hint(text: String) -> void:
 	# The hints are written with Escape; the web build names Backspace instead (Ui.back_key).
 	text = text.replace("ESC  ", Ui.back_key() + "  ")
-	var hint := Ui.caption(text, 22, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+	var hint := Ui.shrink_to_fit(Ui.caption(text, 22, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 15)
 	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(hint)
 
@@ -470,7 +470,7 @@ func _hint(text: String) -> void:
 func _show_toast(text: String) -> void:
 	if _toast and is_instance_valid(_toast):
 		_toast.queue_free()
-	_toast = Ui.label(text, 26, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	_toast = Ui.shrink_to_fit(Ui.label(text, 26, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 16)
 	Ui.anchor(_toast, 0.0, 1.0, 1.0, 1.0, 0, -104, 0, -70, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(_toast)
 
@@ -563,13 +563,13 @@ func _show_how_to_play() -> void:
 	var heading := Ui.heading("HOW TO PLAY", 84, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 56, 0, 156, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(heading)
-	var intro := Ui.label("Notes roll down the highway to the keyboard at its foot. Press each one's key as it arrives.",
-		28, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	var intro := Ui.shrink_to_fit(Ui.label("Notes roll down the highway to the keyboard at its foot. Press each one's key as it arrives.",
+		28, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 18)
 	Ui.anchor(intro, 0.0, 0.0, 1.0, 0.0, 40, 170, -40, 212, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(intro)
 	_ui.add_child(_home_row_guide(236.0))
-	var gas := Ui.label("Hits keep your tank full and misses drain it: run out of gas and the drive is over. Hold long notes to their end.",
-		24, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	var gas := Ui.shrink_to_fit(Ui.label("Hits keep your tank full and misses drain it: run out of gas and the drive is over. Hold long notes to their end.",
+		24, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 16)
 	Ui.anchor(gas, 0.0, 0.0, 1.0, 0.0, 40, 512, -40, 550, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(gas)
 	var go := Ui.card(true)
@@ -618,14 +618,14 @@ func _home_row_guide(top: float) -> Control:
 	var right := Ui.label("RIGHT HAND RESTS HERE", 20, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(right, 0.0, 0.0, 0.0, 0.0, right_x, 4, right_x + cap * 4 + gap * 3, 34, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(right)
-	var note := Ui.label("Notes arrive in the colour of the finger that plays them. Index fingers reach for G and H; Easy never uses them.", 24, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	var note := Ui.shrink_to_fit(Ui.label("Notes arrive in the colour of the finger that plays them. Index fingers reach for G and H; Easy never uses them.", 24, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER), 1120.0, 16)
 	Ui.anchor(note, 0.0, 0.0, 1.0, 0.0, -100, 140, 100, 176, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(note)
-	var sharps := Ui.label("On Normal and Hard, sharps arrive in orange: play them on the row above, W E R T Y U I O P, between the home keys.", 24, Color(1.0, 0.62, 0.25), HORIZONTAL_ALIGNMENT_CENTER)
+	var sharps := Ui.shrink_to_fit(Ui.label("On Normal and Hard, sharps arrive in orange: play them on the row above, W E R T Y U I O P, between the home keys.", 24, Color(1.0, 0.62, 0.25), HORIZONTAL_ALIGNMENT_CENTER), 1200.0, 16)
 	Ui.anchor(sharps, 0.0, 0.0, 1.0, 0.0, -140, 178, 140, 214, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(sharps)
 	# Hard's new thing, in the power chords' own white.
-	var power := Ui.label("On Hard, power chords: notes joined by a white bar. Strike them together.", 24, Highway.COLOR_POWER, HORIZONTAL_ALIGNMENT_CENTER)
+	var power := Ui.shrink_to_fit(Ui.label("On Hard, power chords: notes joined by a white bar. Strike them together.", 24, Highway.COLOR_POWER, HORIZONTAL_ALIGNMENT_CENTER), 1200.0, 16)
 	Ui.anchor(power, 0.0, 0.0, 1.0, 0.0, -140, 216, 140, 252, HORIZONTAL_ALIGNMENT_CENTER)
 	box.add_child(power)
 	return box
@@ -1550,9 +1550,7 @@ func _battle_key(code: Key) -> void:
 				_battle_host()
 			elif code == KEY_J and can:
 				_click()
-				_battle_input = "code" if Battle.online_available() else "address"
-				_battle_message = ""
-				_present_battle()
+				_battle_open_join()
 			elif code == KEY_ESCAPE:
 				_click()
 				_battle_message = ""
@@ -1595,10 +1593,11 @@ func _on_battle_action(action: String, arg: Variant) -> void:
 			if not _battle_busy:
 				_battle_host()
 		"join":
-			_battle_input = "code" if Battle.online_available() else "address"
-			_present_battle()
+			if not _battle_busy:
+				_battle_open_join()
 		"submit":
-			_battle_join(str(arg))
+			if not _battle_busy:
+				_battle_join(str(arg))
 		"cancel_input":
 			_battle_input = ""
 			_present_battle()
@@ -1616,8 +1615,45 @@ func _on_battle_action(action: String, arg: Variant) -> void:
 			_battle_key(KEY_ESCAPE)
 
 
+## Before an online Host or Join: a player WASD said isn't signed in, and gave a sign-in page for,
+## gets that page in a new tab on this press (a browser opens tabs only right after a key press or
+## click). Returns true when it opened, and the press does nothing else.
+func _battle_open_sign_in() -> bool:
+	if not Battle.online_available() or Battle.sign_in_url.is_empty():
+		return false
+	OS.shell_open(Battle.sign_in_url)
+	Battle.sign_in_url = ""
+	_battle_message = "Sign in to WASD Engine in the new tab, then come back here and press H to host or J to join."
+	_present_battle()
+	return true
+
+
+## J or the Join card: the box for the lobby code (online) or the host's address (LAN). Online, the
+## player signs in to WASD now, from this press, so a sign-in problem shows before they type a code.
+func _battle_open_join() -> void:
+	if _battle_open_sign_in():
+		return
+	_battle_input = "code" if Battle.online_available() else "address"
+	_battle_message = ""
+	if not Battle.online_available():
+		_present_battle()
+		return
+	_battle_busy = true
+	_battle_message = "Signing in with WASD Engine..."
+	_present_battle()
+	var signed: Dictionary = await Battle.sign_in_online("J")
+	_battle_busy = false
+	_battle_message = "" if signed.get("ok", false) else str(signed.get("message", ""))
+	if not signed.get("ok", false):
+		_battle_input = ""
+	if _screen == Screen.BATTLE:
+		_present_battle()
+
+
 func _battle_host() -> void:
 	_battle_message = ""
+	if _battle_open_sign_in():
+		return
 	if Battle.online_available():
 		_battle_busy = true
 		_battle_message = "Signing in with WASD Engine and opening a lobby..."
@@ -1635,6 +1671,8 @@ func _battle_host() -> void:
 
 func _battle_join(text: String) -> void:
 	text = text.strip_edges()
+	if _battle_open_sign_in():
+		return
 	if Battle.online_available():
 		if text.length() != 6:
 			_battle_message = "A lobby code has six letters."

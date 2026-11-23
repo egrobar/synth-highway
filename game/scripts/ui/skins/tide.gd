@@ -65,12 +65,14 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_tabs(s, m)
 	_header(s, m)
 	_rows(s, m)
-	_load(s)
+	if not m.get("pick", false):
+		_load(s)
 	_plate(s, m)
 	if not (m["song"] as Dictionary).is_empty():
 		for i: int in mini((m["cards"] as Array).size(), CARDS.size()):
 			_card(s, CARDS[i], m["cards"][i])
-		_practice(s, m)
+		if not m.get("pick", false):
+			_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
 	_battle(s, m)
@@ -474,17 +476,18 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 # ---------------------------------------------------------------- hints and notes
 
 func _hints(s: RouteScreen, m: Dictionary) -> void:
-	var line: String = "← → region     ↑ ↓ song     TAB difficulty     P practice     ENTER drive     M map     " + Ui.back_key() + " menu"
-	if (m["song"] as Dictionary).get("imported", false):
-		line += "     X remove"
-	text(s, Rect2(40, 672, 1200, 17), line, font("Manrope"), 12, SLATE)
+	var line: String = hint_line(m, "     ", true)
+	var f: Font = font("Manrope", 600)
+	# Brighter and bigger than the design's 12 px slate, which was hard to read in the WASD page's
+	# game frame (playtest, 2026-11-23).
+	text(s, Rect2(40, 668, HINTS_RIGHT - 40.0, 22), line, f, fit_size(line, f, 15, HINTS_RIGHT - 40.0), MIST)
 
 
 ## Battle, at the right end of the hints row: a frosted pill edged in coral.
 func _battle(s: RouteScreen, m: Dictionary) -> void:
 	box(s, BATTLE, GLASS, Color(CORAL, 0.8), 1.0, 21.0)
 	battle_contents(s, BATTLE, m, [font("Manrope", 500), 11, SLATE, Color.TRANSPARENT, Color(FOAM, 0.3), 4.0],
-		[font("Manrope", 700), 15, CORAL], [font("Manrope", 600), 12, MIST, "race friends"], true)
+		[font("Manrope", 700), 15, CORAL], [font("Manrope", 600), 14, MIST, "race friends"], true)
 
 
 ## A passing note (an import finished, a song removed): a frosted chip on the sea, right of the

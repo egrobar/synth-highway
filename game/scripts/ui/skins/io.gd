@@ -49,12 +49,14 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_tabs(s, m)
 	_header(s, m)
 	_panel(s, m)
-	_load(s)
+	if not m.get("pick", false):
+		_load(s)
 	_readout(s, m)
 	if not (m["song"] as Dictionary).is_empty():
 		for i: int in mini((m["cards"] as Array).size(), CARDS.size()):
 			_mode(s, CARDS[i], m["cards"][i])
-		_practice(s, m)
+		if not m.get("pick", false):
+			_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
 	_battle(s, m)
@@ -120,7 +122,10 @@ func _header(s: RouteScreen, m: Dictionary) -> void:
 	text(s, Rect2(x, 100, maxf(540.0 - x, 10.0), 32), genres, font("Oswald", 600, 1.5), 12, LABEL)
 	var locked: bool = region["locked"]
 	var line: String = str(region["locked_text"]) if locked else str(region["blurb"])
-	text(s, Rect2(40, 134, 500, 19.3), line, font("Oswald", 500 if locked else 400), 13, LAMP if locked else MUTED)
+	# Locked: a lighter orange than the lamp's and a size up (the lamp orange, 13 px and thin on dark
+	# steel, was hard to read on the WASD page: playtest, 2026-11-23).
+	text(s, Rect2(40, 133, 500, 21), line, font("Oswald", 500 if locked else 400), 14 if locked else 13,
+		Color("#FF9A62") if locked else MUTED)
 
 
 ## The radiation warning sign from the design's SVG (viewBox 46 x 40), scaled by `k`.
@@ -407,19 +412,20 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 
 
 func _hints(s: RouteScreen, m: Dictionary) -> void:
-	var line: String = "← → SECTOR    ↑ ↓ CIRCUIT    TAB MODE    P PRACTICE    ENTER DRIVE    M MAP    " + Ui.back_key() + " MENU"
-	if (m["song"] as Dictionary).get("imported", false):
-		line += "    X REMOVE"
+	var line: String = hint_line(m, "    ", false, {"REGION": "SECTOR", "SONG": "CIRCUIT", "DIFFICULTY": "MODE"})
 	var f: Font = font("Oswald", 600, 2.0)
-	var line_w: float = text_width(line, f, 12)
-	var plate := Rect2(40, HINTS_Y, line_w + 32.0, _line_h(f, 12) + 20.0)
+	var size: int = fit_size(line, f, 16, HINTS_RIGHT - 40.0 - 32.0)
+	var line_w: float = text_width(line, f, size)
+	var plate_h: float = _line_h(f, size) + 16.0
+	# Bottom edge where the design's 12 px plate had it, clear of the hazard stripes.
+	var plate := Rect2(40, 698.0 - plate_h, line_w + 32.0, plate_h)
 	box(s, plate, LABEL, INK, 2.0)
 	# A rivet in each end's padding.
 	var cy: float = plate.position.y + plate.size.y * 0.5
 	for rx: float in [plate.position.x + 8.0, plate.end.x - 8.0]:
 		s.draw_circle(Vector2(rx, cy), 2.6, Color("#8A857A"), true, -1.0, true)
 		s.draw_circle(Vector2(rx - 0.7, cy - 0.7), 1.1, Color("#F2EDE2"), true, -1.0, true)
-	text(s, Rect2(plate.position.x + 16.0, plate.position.y + 2.0, line_w + 1.0, plate.size.y - 4.0), line, f, 12, INK)
+	text(s, Rect2(plate.position.x + 16.0, plate.position.y + 2.0, line_w + 1.0, plate.size.y - 4.0), line, f, size, INK)
 
 
 ## Battle, at the right end of the hints row: a steel panel with a stencilled label.
@@ -427,18 +433,20 @@ func _battle(s: RouteScreen, m: Dictionary) -> void:
 	box(s, BATTLE, PANEL, INK, 2.0)
 	box(s, BATTLE.grow(-2.0), Color.TRANSPARENT, SULPHUR_LEDGE, 1.0)
 	battle_contents(s, BATTLE, m, [font("Oswald"), 12, DIM, Color.TRANSPARENT, GRIP, 0.0],
-		[font("Saira Stencil One", 400, 1.5), 18, SULPHUR], [font("Oswald", 500, 1.0), 12, MUTED, "RACE FRIENDS"])
+		[font("Saira Stencil One", 400, 1.5), 18, SULPHUR], [font("Oswald", 500, 1.0), 14, MUTED, "RACE FRIENDS"])
 
 
 ## A passing note on a strip of phosphor, right-aligned between Enter Drive and the hints.
 func _message(s: RouteScreen, message: String) -> void:
 	var f: Font = font("VT323", 400, 1.0)
 	var shown: String = "> " + message.to_upper()
-	var w: float = minf(text_width(shown, f, 20) + 30.0, 660.0)
-	var rect := Rect2(1240.0 - w, 606, w, 36)
+	var w: float = minf(text_width(shown, f, 22) + 30.0, 700.0)
+	var rect := Rect2(1240.0 - w, 604, w, 38)
 	box(s, rect, SCREEN, INK, 3.0)
 	box(s, rect.grow(-3.0), Color.TRANSPARENT, RIM, 1.0)
-	_lit(s, rect.grow_individual(-15.0, 0.0, -15.0, 0.0), shown, f, 20, SULPHUR)
+	# A paler phosphor than the readout's sulphur and a size up: the sulphur pixel type read as dim
+	# orange in the WASD page's game frame (playtest, 2026-11-23).
+	_lit(s, rect.grow_individual(-15.0, 0.0, -15.0, 0.0), shown, f, 22, Color("#FFE58F"))
 
 
 # ---------------------------------------------------------------- pieces

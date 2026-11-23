@@ -35,12 +35,14 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_tabs(s, m)
 	_header(s, m)
 	_dial(s, m)
-	_load(s)
+	if not m.get("pick", false):
+		_load(s)
 	_windshield(s, m)
 	if not (m["song"] as Dictionary).is_empty():
 		for i: int in mini((m["cards"] as Array).size(), CARDS.size()):
 			_plate(s, CARDS[i], m["cards"][i])
-		_practice(s, m)
+		if not m.get("pick", false):
+			_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
 	_battle(s, m)
@@ -274,16 +276,15 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 
 
 func _hints(s: RouteScreen, m: Dictionary) -> void:
-	var line: String = "← → REGION   ↑ ↓ SONG   TAB DIFFICULTY   P PRACTICE   ENTER DRIVE   M MAP   " + Ui.back_key() + " MENU"
-	if (m["song"] as Dictionary).get("imported", false):
-		line += "   X REMOVE"
+	var line: String = hint_line(m, "   ")
 	var f: Font = font("Courier Prime", 700, 1.5)
-	var w: float = text_width(line, f, 12) + 28.0
-	var label := Rect2(0, 0, w, 30)
-	s.begin_local(Transform2D(deg_to_rad(-0.6), Vector2(40 + w * 0.5, 664 + 15)) * Transform2D(0.0, -label.size * 0.5))
+	var size: int = fit_size(line, f, 15, HINTS_RIGHT - 40.0 - 28.0)
+	var w: float = text_width(line, f, size) + 28.0
+	var label := Rect2(0, 0, w, size + 20.0)
+	s.begin_local(Transform2D(deg_to_rad(-0.6), Vector2(40 + w * 0.5, 680)) * Transform2D(0.0, -label.size * 0.5))
 	s.draw_rect(label, EDGE)
 	s.draw_rect(Rect2(0, 0, w, 1), Color(1, 1, 1, 0.12))
-	text(s, Rect2(14, 0, w - 28, 30), line, f, 12, Color("#F4EDE4"))
+	text(s, Rect2(14, 0, w - 28, label.size.y), line, f, size, Color("#F4EDE4"))
 	s.end_local()
 
 ## Battle, at the right end of the hints row: a vinyl-brown plate edged in amber.
@@ -291,7 +292,7 @@ func _battle(s: RouteScreen, m: Dictionary) -> void:
 	hard_shadow(s, BATTLE, Vector2(0, 4), EDGE, 6.0)
 	box(s, BATTLE, BG, AMBER, 2.0, 6.0)
 	battle_contents(s, BATTLE, m, [font("Oswald", 600), 14, INK, CREAM, Color.TRANSPARENT, 3.0],
-		[font("Alfa Slab One", 400, 1.0), 18, AMBER], [font("Oswald"), 13, DUST, "race friends"])
+		[font("Alfa Slab One", 400, 1.0), 18, AMBER], [font("Oswald"), 15, DUST, "race friends"])
 
 
 

@@ -28,6 +28,8 @@ extends RefCounted
 ##   battle    {text ("BATTLE", or "BACK TO LOBBY" while picking a battle's song), key ("B")}:
 ##             the button at the right end of the hints row (battle_contents)
 ##   drive_text what Enter Drive reads instead ("ENTER PICK SONG" while picking), or ""
+##   pick      true while picking a battle's song: no Practice or Load, and the hints are the
+##             picker's (hint_items)
 ## Actions a skin can register: "region" (index), "song" (index), "difficulty" ("easy",
 ## "normal" or "hard"), "practice", "drive", "load", "battle".
 
@@ -49,7 +51,7 @@ const DRIVE := Rect2(776, 512, 464, 80)
 const HINTS_Y := 660.0
 ## Battle, at the right end of the hints row (added 2026-11-23: nothing past the title showed
 ## battles). Right of every skin's hints, below its passing message (y 604-646).
-const BATTLE := Rect2(1010, 654, 230, 42)
+const BATTLE := Rect2(996, 654, 244, 42)
 const DASH := "–"
 
 ## The fill outside the 1280x720 design when the window is a different shape.
@@ -79,12 +81,15 @@ static func register_hits(screen: RouteScreen, m: Dictionary) -> void:
 		var row: Dictionary = rows[slot]
 		if not row.is_empty():
 			screen.hit(row_rect(slot), "song", row["index"])
-	screen.hit(LOAD, "load")
+	var picking: bool = m.get("pick", false)
+	if not picking:
+		screen.hit(LOAD, "load")
 	if not (m.get("song", {}) as Dictionary).is_empty():
 		var cards: Array = m.get("cards", [])
 		for i: int in mini(cards.size(), CARDS.size()):
 			screen.hit(CARDS[i], "difficulty", str((cards[i] as Dictionary).get("key", Chart.DIFFICULTIES[i])))
-		screen.hit(PRACTICE, "practice")
+		if not picking:
+			screen.hit(PRACTICE, "practice")
 		screen.hit(DRIVE, "drive")
 	screen.hit(BATTLE, "battle")
 
@@ -123,6 +128,46 @@ static func battle_contents(c: CanvasItem, rect: Rect2, m: Dictionary, cap: Arra
 	while label_size > 11 and text_width(title, label_font, label_size) > right - left:
 		label_size -= 1
 	text(c, Rect2(left, rect.position.y, right - left, rect.size.y), title, label_font, label_size, label[2])
+
+
+## The hint row's keys and what they do, as [key, label] pairs in capitals, for each skin to set in
+## its own style; `words` renames labels in a skin's own vocabulary ({"SONG": "CIRCUIT"}). The
+## battle song picker has its own short set; Enter Drive isn't hinted, as its button says it.
+static func hint_items(m: Dictionary, words: Dictionary = {}) -> Array:
+	var items: Array = []
+	if m.get("pick", false):
+		# B goes back to the lobby too, but the Back to lobby button beside the row already says so.
+		items = [["← →", "REGION"], ["↑ ↓", "SONG"], ["ENTER", "PICK IT"]]
+	else:
+		items = [["← →", "REGION"], ["↑ ↓", "SONG"], ["TAB", "DIFFICULTY"], ["P", "PRACTICE"], ["M", "MAP"],
+			[Ui.back_key(), "MENU"]]
+		if (m.get("song", {}) as Dictionary).get("imported", false):
+			items.append(["X", "REMOVE"])
+	for item: Array in items:
+		item[1] = str(words.get(item[1], item[1]))
+	return items
+
+
+## The hint row as one line: "KEY label" pairs joined by `gap`, labels in lower case when `lower`.
+static func hint_line(m: Dictionary, gap: String, lower: bool = false, words: Dictionary = {}) -> String:
+	var parts: PackedStringArray = []
+	for item: Array in hint_items(m, words):
+		parts.append("%s %s" % [item[0], str(item[1]).to_lower() if lower else str(item[1])])
+	return gap.join(parts)
+
+
+## The hint row's right edge: clear of the Battle button.
+const HINTS_RIGHT := 978.0
+
+
+## The biggest size up to `preferred` at which `value` fits `width`, no smaller than `smallest`.
+## The hint rows were 11-12 px in the 1280 design: about 8 px on screen in the WASD page's game
+## frame (playtest, 2026-11-23), so they start bigger and step down only to fit.
+static func fit_size(value: String, f: Font, preferred: int, width: float, smallest: int = 11) -> int:
+	var size: int = preferred
+	while size > smallest and text_width(value, f, size) > width:
+		size -= 1
+	return size
 
 
 ## What the big Enter button reads.

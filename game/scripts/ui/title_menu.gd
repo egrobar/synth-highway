@@ -77,7 +77,7 @@ func present(model: Dictionary) -> void:
 		_small_button(str(buttons[i][0]), x, button_w, str(buttons[i][1]), str(buttons[i][2]))
 		bottom_row.append(str(buttons[i][0]))
 	_grid = [["drive", "battle"], bottom_row]
-	var hint := Ui.shrink_to_fit(Ui.caption("ARROWS  choose        ENTER  select        %s  menu" % Ui.back_key(), 22, Ui.ACCENT,
+	var hint := Ui.shrink_to_fit(Ui.caption("ARROWS  choose        ENTER  select        %s  menu" % Ui.back_key(), 24, Ui.ACCENT,
 		HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 15)
 	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	add_child(hint)
@@ -249,7 +249,7 @@ func _small_button(id: String, x: float, width: float, title: String, key: Strin
 func _key_chip(key: String, inset: Vector2) -> Panel:
 	var face: Font = Ui.mono_font()
 	# At least square-ish, so a one-letter key is not a sliver beside SPACE.
-	var w: float = maxf(face.get_string_size(key, HORIZONTAL_ALIGNMENT_LEFT, -1, 20).x + 26.0, 40.0)
+	var w: float = maxf(face.get_string_size(key, HORIZONTAL_ALIGNMENT_LEFT, -1, Ui.caption_size(20)).x + 26.0, 40.0)
 	var chip := Panel.new()
 	var box := StyleBoxFlat.new()
 	box.bg_color = Color(0, 0, 0, 0.25)

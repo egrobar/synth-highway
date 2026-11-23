@@ -35,12 +35,14 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_header(s, m)
 	_glass(s, Rect2(34, 158, 512, 400))
 	_rows(s, m)
-	_load(s)
+	if not m.get("pick", false):
+		_load(s)
 	_title_pane(s, m)
 	if not (m["song"] as Dictionary).is_empty():
 		for i: int in mini((m["cards"] as Array).size(), CARDS.size()):
 			_card(s, CARDS[i], m["cards"][i])
-		_practice(s, m)
+		if not m.get("pick", false):
+			_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
 	_battle(s, m)
@@ -320,17 +322,18 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 
 
 func _hints(s: RouteScreen, m: Dictionary) -> void:
-	var line: String = "← → region    ↑ ↓ station    TAB difficulty    P practice    ENTER drive    M map    " + Ui.back_key() + " menu"
-	if (m["song"] as Dictionary).get("imported", false):
-		line += "    X remove"
-	text(s, Rect2(40, 666, 1200, 18), line, font("Azeret Mono"), 11, SAGE)
+	var line: String = hint_line(m, "    ", true, {"SONG": "STATION"})
+	var f: Font = font("Azeret Mono")
+	# Brighter than the design's sage, and as big as fits: 11 px sage was hard to read in the WASD
+	# page's game frame (playtest, 2026-11-23).
+	text(s, Rect2(40, 664, HINTS_RIGHT - 40.0, 22), line, f, fit_size(line, f, 14, HINTS_RIGHT - 40.0), MIST)
 
 ## Battle, at the right end of the hints row: a glass pill outlined in mint.
 func _battle(s: RouteScreen, m: Dictionary) -> void:
 	box(s, BATTLE, Color(BG, 0.8), Color.TRANSPARENT, 0.0, 21.0)
 	box(s, BATTLE, Color(MINT, 0.06), Color(MINT, 0.7), 1.0, 21.0)
 	battle_contents(s, BATTLE, m, [font("Azeret Mono"), 10, SAGE, Color.TRANSPARENT, Color(FROST, 0.35), 4.0],
-		[font("Outfit", 400), 16, MINT], [font("Azeret Mono"), 10, SAGE, "race friends"], true)
+		[font("Outfit", 400), 16, MINT], [font("Azeret Mono"), 12, MIST, "race friends"], true)
 
 
 

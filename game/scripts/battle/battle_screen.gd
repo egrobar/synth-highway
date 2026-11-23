@@ -118,7 +118,7 @@ func _draw_connect(model: Dictionary) -> void:
 				acted.emit("cancel_input", null))
 		_content.add_child(_input)
 		_input.grab_focus.call_deferred()
-		_line("ENTER to join", 688.0, 20, Ui.MUTED)
+		_line("ENTER to join", 686.0, 22, Ui.MUTED)
 	var message: String = str(model.get("message", ""))
 	if not message.is_empty():
 		_line(message, 728.0, 26, Ui.WARM)
@@ -128,7 +128,7 @@ func _draw_connect(model: Dictionary) -> void:
 # ---------------------------------------------------------------- lobby
 
 func _draw_lobby(model: Dictionary) -> void:
-	_content.add_child(Ui.dim_panel(0.62))
+	_content.add_child(Ui.dim_panel(0.74))
 	_back_button("Leave")
 	var heading := Ui.heading("BATTLE LOBBY", 60, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 30, 0, 102, HORIZONTAL_ALIGNMENT_CENTER)
@@ -140,14 +140,14 @@ func _draw_lobby(model: Dictionary) -> void:
 	_copy_button(Vector2(318, 144))
 	code_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_content.add_child(code_box)
-	var code_caption := Ui.caption("ADDRESS" if lan else "LOBBY CODE", 18, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(code_caption, 0.0, 0.0, 1.0, 0.0, 0, 8, 0, 30, HORIZONTAL_ALIGNMENT_CENTER)
+	var code_caption := Ui.caption("ADDRESS" if lan else "LOBBY CODE", 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(code_caption, 0.0, 0.0, 1.0, 0.0, 0, 4, 0, 30, HORIZONTAL_ALIGNMENT_CENTER)
 	code_box.add_child(code_caption)
 	var code := Ui.heading(str(model.get("code", "")), 46, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(code, 0.0, 0.0, 1.0, 1.0, 0, 26, 0, -6, HORIZONTAL_ALIGNMENT_CENTER)
 	code_box.add_child(code)
 	_line("Friends pick Battle, then %s." % ("Join by address and type this" if lan else "Join a battle and type this code"),
-		222.0, 22, Ui.MUTED)
+		220.0, 24, Ui.TEXT)
 	# Four seats in a row: who's in, and the song each put in the draw.
 	var slots: Array = model.get("slots", [])
 	var seat_w: float = 330.0
@@ -161,31 +161,31 @@ func _draw_lobby(model: Dictionary) -> void:
 		Ui.anchor(seat, 0.5, 0.0, 0.5, 0.0, x, 270, x + seat_w, 470)
 		seat.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		if empty:
-			seat.modulate.a = 0.5
+			seat.modulate.a = 0.72
 		_content.add_child(seat)
 		var tag := Ui.caption("SEAT %d%s%s" % [i + 1, "  ·  HOST" if bool(slot.get("host", false)) else "",
-			"  ·  YOU" if bool(slot.get("me", false)) else ""], 17, Ui.ACCENT if not empty else Ui.MUTED)
+			"  ·  YOU" if bool(slot.get("me", false)) else ""], 20, Ui.ACCENT if not empty else Ui.MUTED)
 		Ui.shrink_to_fit(tag, seat_w - 40.0, 12)
-		Ui.anchor(tag, 0.0, 0.0, 1.0, 0.0, 20, 14, -20, 36)
+		Ui.anchor(tag, 0.0, 0.0, 1.0, 0.0, 20, 10, -20, 38)
 		seat.add_child(tag)
 		var name := Ui.heading("open seat" if empty else str(slot.get("name", "")), 32, Ui.TEXT if not empty else Ui.MUTED)
 		name.clip_text = true
 		name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		Ui.anchor(name, 0.0, 0.0, 1.0, 0.0, 20, 40, -20, 84)
 		seat.add_child(name)
-		var pick_caption := Ui.caption("SONG FOR THE DRAW", 16, Ui.MUTED)
-		Ui.anchor(pick_caption, 0.0, 0.0, 1.0, 0.0, 20, 104, -20, 124)
+		var pick_caption := Ui.shrink_to_fit(Ui.caption("" if empty else "SONG FOR THE DRAW", 19, Ui.MUTED), seat_w - 40.0, 12)
+		Ui.anchor(pick_caption, 0.0, 0.0, 1.0, 0.0, 20, 96, -20, 122)
 		seat.add_child(pick_caption)
 		var suggestion: String = str(slot.get("suggestion", ""))
 		var pick_text: String = "waiting for a driver" if empty else ("not picked yet" if suggestion.is_empty() else suggestion)
 		var pick := Ui.label(pick_text, 24, Ui.WARM if not suggestion.is_empty() else Ui.MUTED)
 		pick.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		pick.max_lines_visible = 2
-		Ui.anchor(pick, 0.0, 0.0, 1.0, 0.0, 20, 124, -20, 190)
+		Ui.anchor(pick, 0.0, 0.0, 1.0, 0.0, 20, 122, -20, 192)
 		seat.add_child(pick)
 	# The level everyone plays: the host's choice.
 	var is_host: bool = bool(model.get("is_host", false))
-	_line("EVERYONE PLAYS", 494.0, 18, Ui.MUTED)
+	_line("EVERYONE PLAYS", 488.0, 20, Ui.MUTED)
 	for i: int in LEVELS.size():
 		var level: String = LEVELS[i]
 		var on: bool = level == str(model.get("difficulty", "normal"))
@@ -202,9 +202,10 @@ func _draw_lobby(model: Dictionary) -> void:
 		var text := Ui.heading(level.to_upper(), 28, Ui.ACCENT if on else Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 		Ui.anchor(text, 0.0, 0.0, 1.0, 1.0, 0, 8, 0, -8, HORIZONTAL_ALIGNMENT_CENTER)
 		pill.add_child(text)
-	var buttons: Array = [["S", "Pick your song", "suggest"]]
+	var buttons: Array = [["S", "Change your song" if bool(model.get("picked", false)) else "Pick your song", "suggest"]]
 	if is_host:
-		buttons.append(["ENTER", "Draw a song and race", "draw"])
+		# While it can't draw it says what it is waiting for, so the next step is on the button itself.
+		buttons.append(["ENTER", str(model.get("draw_text", "Draw a song and race")), "draw"])
 	var button_w: float = 420.0
 	var total: float = buttons.size() * button_w + (buttons.size() - 1) * 24.0
 	for i: int in buttons.size():
@@ -216,23 +217,24 @@ func _draw_lobby(model: Dictionary) -> void:
 		if not ready:
 			button.modulate.a = 0.5
 		_content.add_child(button)
-		var key := Ui.caption(str(buttons[i][0]), 20, Ui.ACCENT)
-		Ui.anchor(key, 0.0, 0.0, 0.0, 1.0, 18, 20, 110, -18)
+		var key := Ui.caption(str(buttons[i][0]), 22, Ui.ACCENT)
+		key.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		Ui.anchor(key, 0.0, 0.0, 0.0, 1.0, 18, 0, 110, 0)
 		button.add_child(key)
 		var label := Ui.shrink_to_fit(Ui.label(str(buttons[i][1]), 28, Ui.TEXT), button_w - 120.0, 18)
 		Ui.anchor(label, 0.0, 0.0, 1.0, 1.0, 104, 12, -16, -12)
 		button.add_child(label)
 	var note: String = str(model.get("draw_note", ""))
 	if is_host and not note.is_empty():
-		_line(note, 680.0, 22, Ui.MUTED)
+		_line(note, 680.0, 24, Ui.TEXT)
 	elif not is_host:
-		_line("The host draws one of the picked songs. Everyone races it at the same moment.", 680.0, 22, Ui.MUTED)
+		_line("The host draws one of the picked songs. Everyone races it at the same moment.", 680.0, 24, Ui.TEXT)
 	var message: String = str(model.get("message", ""))
 	if not message.is_empty():
 		_line(message, 716.0, 24, Ui.WARM)
 	var ping: int = int(model.get("ping", 0))
 	if not is_host and ping >= 0:
-		var ping_label := Ui.caption("ping %d ms" % ping, 18, Ui.MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
+		var ping_label := Ui.caption("ping %d ms" % ping, 20, Ui.MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
 		Ui.anchor(ping_label, 1.0, 0.0, 1.0, 0.0, -260, 24, -30, 48, HORIZONTAL_ALIGNMENT_RIGHT)
 		_content.add_child(ping_label)
 	_hint(("S  pick your song        TAB  difficulty        ENTER  draw        C  copy code        ESC  leave") if is_host
@@ -250,7 +252,7 @@ func _draw_standings(model: Dictionary) -> void:
 		Ui.DESIGN_WIDTH - 2.0 * 280.0, 40)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 60, 0, 150, HORIZONTAL_ALIGNMENT_CENTER)
 	_content.add_child(heading)
-	_line("FINAL STANDINGS" if final else "STILL DRIVING: THE ORDER SO FAR", 156.0, 22, Ui.MUTED)
+	_line("FINAL STANDINGS" if final else "STILL DRIVING: THE ORDER SO FAR", 154.0, 24, Ui.MUTED)
 	var rows: Array = model.get("rows", [])
 	for i: int in rows.size():
 		var row: Dictionary = rows[i]
@@ -269,7 +271,7 @@ func _draw_standings(model: Dictionary) -> void:
 		name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		Ui.anchor(name, 0.0, 0.0, 0.0, 0.0, 160, 10, 640, 56)
 		card.add_child(name)
-		var detail := Ui.shrink_to_fit(Ui.label(str(row.get("detail", "")), 22, Ui.MUTED), 580.0, 15)
+		var detail := Ui.shrink_to_fit(Ui.label(str(row.get("detail", "")), 24, Ui.MUTED), 580.0, 16)
 		Ui.anchor(detail, 0.0, 0.0, 0.0, 0.0, 160, 56, 760, 86)
 		card.add_child(detail)
 		var score := Ui.heading(RivalBar._num(int(row.get("score", 0))), 50, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
@@ -402,7 +404,7 @@ func _copy_button(at: Vector2) -> void:
 			copy_code()
 			acted.emit("copied", null))
 	_content.add_child(button)
-	var key := Ui.caption("C", 18, Ui.MUTED)
+	var key := Ui.caption("C", 20, Ui.MUTED)
 	key.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	Ui.anchor(key, 0.0, 0.0, 0.0, 1.0, 16, 0, 40, 0)
 	button.add_child(key)
@@ -422,7 +424,8 @@ func _back_button(text: String) -> void:
 	_clickable(button, "back")
 	_content.add_child(button)
 	var key := Ui.caption(Ui.back_key(), 18, Ui.MUTED)
-	Ui.anchor(key, 0.0, 0.0, 1.0, 1.0, 18, 16, -10, -14)
+	key.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	Ui.anchor(key, 0.0, 0.0, 1.0, 1.0, 16, 0, -10, 0)
 	button.add_child(key)
 	var label := Ui.label(text, 26, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
 	Ui.anchor(label, 0.0, 0.0, 1.0, 1.0, 0, 8, -20, -8, HORIZONTAL_ALIGNMENT_RIGHT)
@@ -436,8 +439,8 @@ func _line(text: String, top: float, size: int, color: Color) -> void:
 
 
 func _hint(text: String) -> void:
-	var hint := Ui.shrink_to_fit(Ui.caption(text.replace("ESC  ", Ui.back_key() + "  "), 22, Ui.ACCENT,
-		HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 15)
+	var hint := Ui.shrink_to_fit(Ui.caption(text.replace("ESC  ", Ui.back_key() + "  "), 24, Ui.ACCENT,
+		HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 16)
 	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	_content.add_child(hint)
 

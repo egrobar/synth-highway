@@ -101,7 +101,7 @@ var _calib_fired: Array[int] = []
 var _calib_taps: Array[int] = []
 var _calib_status: Label
 var _calib_done: bool = false
-var _toast: Label
+var _toast: Control
 ## The Escape menu on the title and route screens, while it is open.
 var _menu: MenuOverlay
 var _title: TitleMenu
@@ -397,7 +397,9 @@ func _end_session() -> void:
 
 
 func _region_unlocked(index: int) -> bool:
-	if _options.has("unlock-all"):
+	# Picking a battle's song: every built-in song is fair game (a battle never saves progress),
+	# so a friend new to the game can race any song.
+	if _options.has("unlock-all") or _battle_pick:
 		return true
 	return _open_regions()[index]
 
@@ -462,16 +464,29 @@ func _accent(region: Dictionary) -> Color:
 func _hint(text: String) -> void:
 	# The hints are written with Escape; the web build names Backspace instead (Ui.back_key).
 	text = text.replace("ESC  ", Ui.back_key() + "  ")
-	var hint := Ui.shrink_to_fit(Ui.caption(text, 22, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 15)
+	var hint := Ui.shrink_to_fit(Ui.caption(text, 24, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 16)
 	Ui.anchor(hint, 0.0, 1.0, 1.0, 1.0, 0, -60, 0, -26, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(hint)
 
 
+## A passing note. On the song select it goes in the region skin's own message chip (a toast
+## there landed on the hint strip, in hard-to-read orange: playtest, 2026-11-23); elsewhere it is a
+## toast on a solid plate, so it reads over the 3D world.
 func _show_toast(text: String) -> void:
+	if _screen == Screen.ROUTE:
+		_show_route(text)
+		return
 	if _toast and is_instance_valid(_toast):
 		_toast.queue_free()
-	_toast = Ui.shrink_to_fit(Ui.label(text, 26, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 80.0, 16)
-	Ui.anchor(_toast, 0.0, 1.0, 1.0, 1.0, 0, -104, 0, -70, HORIZONTAL_ALIGNMENT_CENTER)
+	var label := Ui.shrink_to_fit(Ui.label(text, 26, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER), Ui.DESIGN_WIDTH - 200.0, 18)
+	var width: float = minf(label.get_theme_font("font").get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+		label.get_theme_font_size("font_size")).x + 64.0, Ui.DESIGN_WIDTH - 120.0)
+	_toast = Ui.card(true, Ui.WARM)
+	_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	Ui.anchor(_toast, 0.5, 1.0, 0.5, 1.0, -width * 0.5, -132, width * 0.5, -80)
+	Ui.anchor(label, 0.0, 0.0, 1.0, 1.0, 0, 0, 0, 0, HORIZONTAL_ALIGNMENT_CENTER)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_toast.add_child(label)
 	_ui.add_child(_toast)
 
 
@@ -661,8 +676,11 @@ func _show_route(message: String = "") -> void:
 	_screen = Screen.ROUTE
 	var region: Dictionary = _regions[_region_index]
 	_songs = SongLibrary.in_region(region["id"])
-	if _battle_pick and message.is_empty():
-		message = "Pick a song for the battle's draw: ENTER puts it in.  %s goes back to the lobby." % Ui.back_key()
+	if _battle_pick:
+		# Your own songs are only on your computer, so they can't be raced: the picker leaves them out.
+		_songs = _songs.filter(func(song: Dictionary) -> bool: return song["source"] != "imported")
+		if message.is_empty():
+			message = "Pick a song for the battle: ENTER puts it in the draw."
 	# The song select is a full-screen illustrated skin (RouteScreen; the Song Select Redesigns
 	# canvas), so the 3D world is neither built nor drawn behind it: switching regions here
 	# no longer rebuilds a whole world. The region's ambience still plays.
@@ -825,6 +843,11 @@ func _route_model(message: String) -> Dictionary:
 			"best": str(_save.best_for(song["id"], _level_for(song)).get("grade", "")), "imported": song["source"] == "imported",
 			"remove_armed": _remove_armed_until > Time.get_ticks_msec(), "station": str(song.get("station", ""))}
 		cards = _difficulty_cards(song)
+		if _battle_pick:
+			# The level everyone races is the host's: show that one as chosen.
+			var racing: String = Battle.difficulty if SongLibrary.has_level(song, Battle.difficulty) else "normal"
+			for card: Dictionary in cards:
+				card["selected"] = str(card["key"]) == racing
 	var practising: bool = _practice_step > 0
 	return {
 		"regions": tabs,
@@ -838,6 +861,8 @@ func _route_model(message: String) -> Dictionary:
 		# battle's song, back to its lobby; and while picking, Enter puts the song in the draw.
 		"battle": {"text": "BACK TO LOBBY" if _battle_pick else "BATTLE", "key": "B"},
 		"drive_text": "ENTER PICK SONG" if _battle_pick else "",
+		# The battle song picker (RouteSkin.hint_items): no practice or loading, its own hints.
+		"pick": _battle_pick,
 	}
 
 
@@ -1452,6 +1477,10 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: String) ->
 ## before joining one, and where leaving one lands.
 func _open_battle(back: Callable) -> void:
 	_battle_back = back
+	# A fresh visit: no note left over from an earlier battle.
+	if Battle.phase == Battle.Phase.NONE:
+		_battle_message = ""
+		_battle_input = ""
 	_show_battle()
 
 
@@ -1506,12 +1535,17 @@ func _battle_lobby_model() -> Dictionary:
 			"suggestion": "" if song.is_empty() else str(song["title"])})
 	var picks: int = Battle.suggestions().size()
 	var note: String = "%d song%s in the draw. ENTER draws one and the race starts." % [picks, "" if picks == 1 else "s"]
+	# What the Draw button reads while it can't be used: what it is waiting for.
+	var draw_text: String = "Draw a song and race"
 	if Battle.roster.size() < 2:
-		note = "Waiting for at least one more driver to join."
+		note = "Share the code: the race needs at least one more driver."
+		draw_text = "Waiting for 1 more driver"
 	elif picks == 0:
 		note = "Waiting for a song pick: S to pick yours."
-	return {"kind": "lobby", "code": Battle.lobby_code, "transport": Battle.transport, "slots": slots,
+		draw_text = "Waiting for a song pick"
+	return {"kind": "lobby", "draw_text": draw_text, "code": Battle.lobby_code, "transport": Battle.transport, "slots": slots,
 		"difficulty": Battle.difficulty, "is_host": Battle.is_host(), "can_draw": Battle.can_draw(), "draw_note": note,
+		"picked": not str((Battle.roster.get(Battle.me(), {}) as Dictionary).get("suggestion", "")).is_empty(),
 		"ping": Battle.ping_ms(), "message": _battle_message}
 
 

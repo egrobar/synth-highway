@@ -48,9 +48,12 @@ const STYLES := {
 		"panel": "#020C12E0", "panel_on": "#28100EE6", "border": "#EEF4F24D", "border_w": 1, "border_on": "#FF8F78", "border_on_w": 2,
 		"radius": 16, "shadow": [0, 0], "shadow_color": "#00000000", "dim": "#020A10B0"},
 	"mesa": {"display": ["Saira Stencil One", 400], "body": ["Oswald", 500], "mono": ["VT323", 400],
-		"text": "#E8E2D2", "muted": "#A9A294", "accent": "#FFC81E", "warm": "#FF5A1F",
+		"text": "#E8E2D2", "muted": "#A9A294", "accent": "#FFC81E", "warm": "#FF8A4C",
 		"panel": "#2B2A28F5", "panel_on": "#3A3834F8", "border": "#0B0709", "border_w": 3, "border_on": "#FFC81E", "border_on_w": 3,
-		"radius": 6, "shadow": [0, 5], "shadow_color": "#0B0709", "dim": "#0D0B06C0"},
+		"radius": 6, "shadow": [0, 5], "shadow_color": "#0B0709", "dim": "#0D0B06C0",
+		# VT323 is a pixel face that sets about a third smaller than the others at the same size:
+		# its captions read tiny on the WASD page (playtest, 2026-11-23), so they are set larger.
+		"mono_scale": 1.35},
 	"aurora": {"display": ["Outfit", 200], "body": ["Outfit", 400], "mono": ["Azeret Mono", 400],
 		"text": "#F2FFF9", "muted": "#9EC2B8", "accent": "#9EFFCC", "warm": "#FFD9A6",
 		"panel": "#020304D9", "panel_on": "#0E1E18E6", "border": "#E9FFF673", "border_w": 2, "border_on": "#9EFFCC", "border_on_w": 2,
@@ -99,7 +102,12 @@ static func heading(text: String, size: int, color: Color, align: HorizontalAlig
 
 ## Small print and key hints in the region's caption face.
 static func caption(text: String, size: int, color: Color, align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT) -> Label:
-	return _label(text, size, color, align, mono_font())
+	return _label(text, caption_size(size), color, align, mono_font())
+
+
+## The size a caption of `size` is set at in this region: bigger for a small-setting face (mono_scale).
+static func caption_size(size: int) -> int:
+	return int(round(size * float(_style.get("mono_scale", 1.0))))
 
 
 static func _label(text: String, size: int, color: Color, align: HorizontalAlignment, face: Font) -> Label:

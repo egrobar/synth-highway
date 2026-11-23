@@ -55,13 +55,15 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 	_tabs(s, m)
 	_header(s, m)
 	_list(s, m)
-	_load(s)
+	if not m.get("pick", false):
+		_load(s)
 	_detail(s, m)
 	if not (m["song"] as Dictionary).is_empty():
 		var cards: Array = m["cards"]
 		for i: int in mini(CARDS.size(), cards.size()):
 			_card(s, CARDS[i], cards[i])
-		_practice(s, m)
+		if not m.get("pick", false):
+			_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
 	_battle(s, m)
@@ -464,24 +466,31 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 # ---------------------------------------------------------------- hints and notes
 
 func _hints(s: RouteScreen, m: Dictionary) -> void:
-	var items: Array = [["← →", "REGION"], ["↑ ↓", "SONG"], ["TAB", "DIFFICULTY"], ["P", "PRACTICE"], ["ENTER", "DRIVE"], ["M", "MAP"], [Ui.back_key(), "MENU"]]
-	if (m["song"] as Dictionary).get("imported", false):
-		items.append(["X", "REMOVE"])
+	var items: Array = hint_items(m)
 	var f: Font = font("JetBrains Mono", 500)
-	var h: float = f.get_height(12) + 6.0
+	# The biggest size up to 15 at which the row fits before the Battle button.
+	var size: int = 15
+	while size > 11:
+		var total: float = 40.0
+		for item: Array in items:
+			total += text_width(str(item[0]), f, size) + 14.0 + 6.0 + text_width(str(item[1]), f, size) + 22.0
+		if total <= HINTS_RIGHT:
+			break
+		size -= 1
+	var h: float = f.get_height(size) + 6.0
 	var cy: float = 664.0 + h * 0.5
 	var x: float = 40.0
 	# The design's grey labels vanish on the pink slab: there they turn black, and over the
 	# hairline and halftone band they keep a black halo.
 	var pink_edge: float = lerpf(640.0, 486.4, cy / H)
 	for item: Array in items:
-		x += _key(s, Vector2(x, cy), str(item[0]), Color.WHITE, KEY_EDGE, 6.0, false) + 6.0
-		var w: float = text_width(str(item[1]), f, 12)
+		x += _key(s, Vector2(x, cy), str(item[0]), Color.WHITE, KEY_EDGE, 6.0, false, size) + 6.0
+		var w: float = text_width(str(item[1]), f, size)
 		var label := Rect2(x, cy - h * 0.5, w + 2.0, h)
 		if x >= pink_edge + 2.0:
-			text(s, label, str(item[1]), f, 12, BG)
+			text(s, label, str(item[1]), f, size, BG)
 		else:
-			_halo_text(s, label, str(item[1]), f, 12, SOFT)
+			_halo_text(s, label, str(item[1]), f, size, SOFT)
 		x += w + 22.0
 
 
@@ -489,19 +498,20 @@ func _hints(s: RouteScreen, m: Dictionary) -> void:
 func _battle(s: RouteScreen, m: Dictionary) -> void:
 	poly(s, skewed(BATTLE, 14.0), BG)
 	battle_contents(s, BATTLE, m, [font("JetBrains Mono", 500), 12, WHITE, BG, KEY_EDGE, 0.0],
-		[font("Anton", 400, 0.6), 20, ACID], [font("JetBrains Mono", 500), 11, DIM, "RACE FRIENDS"])
+		[font("Anton", 400, 0.6), 20, ACID], [font("JetBrains Mono", 500), 12, DIM, "RACE FRIENDS"])
 
 
 ## A boxed key cap (JetBrains Mono 12, 1 px border) centred on `at.y`, starting at `at.x` or, with
 ## `from_right`, ending there. Filled black so the slab or halftone never shows through it.
 ## Returns its width.
-func _key(s: RouteScreen, at: Vector2, key: String, ink: Color, edge: Color, pad: float, from_right: bool) -> float:
+func _key(s: RouteScreen, at: Vector2, key: String, ink: Color, edge: Color, pad: float, from_right: bool,
+		size: int = 12) -> float:
 	var f: Font = font("JetBrains Mono", 500)
-	var w: float = text_width(key, f, 12) + pad * 2.0 + 2.0
-	var h: float = f.get_height(12) + 6.0
+	var w: float = text_width(key, f, size) + pad * 2.0 + 2.0
+	var h: float = f.get_height(size) + 6.0
 	var rect := Rect2(at.x - (w if from_right else 0.0), at.y - h * 0.5, w, h)
 	box(s, rect, BG, edge, 1.0)
-	text(s, rect, key, f, 12, ink, HORIZONTAL_ALIGNMENT_CENTER)
+	text(s, rect, key, f, size, ink, HORIZONTAL_ALIGNMENT_CENTER)
 	return w
 
 

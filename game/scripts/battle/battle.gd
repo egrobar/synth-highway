@@ -116,18 +116,12 @@ func me() -> int:
 
 
 ## Hosts a WASD lobby. Call from a key press or click: a browser opens WASD's sign-in only after one.
-## Where a player who isn't signed in to WASD can sign in, when the WASD page said: main.gd opens it
-## on the next Host or Join press (a browser opens a new tab only right after a key press or click).
-var sign_in_url: String = ""
-
 ## What each of the add-on's failures means for a player, by its error code. Its own messages are
 ## written for the game's developer ("Sign in first: call sign_in() from a button press", shown raw
 ## to a player in v6's lobby; playtest 2026-11-23). %s is the key that tries again.
 const PLAYER_MESSAGES := {
-	"signed_out": "Sign in to WASD Engine to battle online, then press %s again.",
-	"sign_in_expired": "Your WASD sign-in ran out. Sign in again, then press %s again.",
-	"popup_blocked": "Your browser blocked the WASD sign-in window. Allow pop-ups for this page, then press %s again.",
-	"cancelled": "The sign-in window closed before you signed in. Press %s to try again.",
+	"signed_out": "Sign in to WASD Engine to battle online: use Sign in on this page, then press %s again.",
+	"sign_in_expired": "Your WASD sign-in ran out. Sign in again on this page, then press %s again.",
 	"timeout": "The connection didn't open in time. A strict network or firewall may be blocking it. Press %s to try again.",
 	"invalid_token": "WASD sign-in didn't work for this game. Reload the page, then press %s again.",
 	"sign_in_unavailable": "Online battles are in the browser version on WASD Engine.",
@@ -139,25 +133,46 @@ const PLAYER_MESSAGES := {
 }
 
 
-## Signs the player in to WASD before an online battle. The add-on's host_lobby and join_lobby ask the
-## WASD page for a sign-in only once they have heard from it, so without this a first Host failed.
-## Call it from the Host or Join key press or click: away from a WASD game page the sign-in opens a
-## window, which browsers allow only then. `again` is the key the failure message says to press.
+## Signs the player in to WASD before an online battle, through the WASD game page that frames the
+## game: the page hands over the sign-in of whoever is signed in there, and for a player who isn't,
+## shows its own Sign in prompt over the game. This never opens anything (as No Refunds never does).
+##
+## Why not just WasdMultiplayer.sign_in(): when it doesn't find the WASD page it opens a WASD sign-in
+## window, and WASD's site answers that window with "Online play outside this game's page isn't
+## available on this site yet" (playtest of v7, 2026-11-23), and v7 itself opened the page's sign-in
+## link in a new tab. And not host_lobby alone (v6): that signs in only once the page has answered
+## the add-on, and otherwise fails with "Sign in first: call sign_in() from a button press".
+## `again` is the key the failure message says to press.
 func sign_in_online(again: String) -> Dictionary:
 	if _wasd() == null:
 		return {"ok": false, "message": "Online battles aren't set up in this build."}
+	if OS.has_feature("web") and not await _on_wasd_page():
+		return {"ok": false, "message": "Online battles run on Synth Highway's page on WASD Engine. Play it there to host or join."}
 	var result: Dictionary = await _wasd().sign_in()
 	if result.get("ok", false):
-		sign_in_url = ""
 		return result
-	sign_in_url = str(result.get("sign_in_url", ""))
 	# The add-on's "timeout" also means a connection that didn't open; here it is the sign-in's.
-	var failed: Dictionary = {"ok": false, "message": "WASD sign-in didn't answer. Press %s to try again." % again
+	return {"ok": false, "message": "WASD sign-in didn't answer. Press %s to try again." % again
 		if str(result.get("error", "")) == "timeout" else player_message(result, again)}
-	if not sign_in_url.is_empty() and str(result.get("error", "")) == "signed_out":
-		failed["message"] = "Sign in to WASD Engine to battle online: press %s to sign in, then come back and press %s." \
-			% [again, again]
-	return failed
+
+
+## True when the game runs inside its WASD Engine game page. The page answers the add-on's hello at
+## startup ("wasd:play:context", which sets the add-on's _parent_wasd); if that hasn't arrived yet,
+## this says hello again and waits up to 1.5 s for the answer, as the add-on itself does.
+func _on_wasd_page() -> bool:
+	if not bool(JavaScriptBridge.eval("window.parent !== window", true)):
+		return false
+	if bool(_wasd().get("_parent_wasd")):
+		return true
+	var app_origin: String = str((_wasd().get("config") as Object).get("app_origin")) if _wasd().get("config") else ""
+	if app_origin.is_empty():
+		return false
+	JavaScriptBridge.eval("try { window.parent.postMessage({type: 'wasd:play:hello', v: 1}, %s); } catch (e) {}"
+		% JSON.stringify(app_origin), true)
+	var deadline: int = Time.get_ticks_msec() + 1500
+	while not bool(_wasd().get("_parent_wasd")) and Time.get_ticks_msec() < deadline:
+		await get_tree().create_timer(0.1, true, false, true).timeout
+	return bool(_wasd().get("_parent_wasd"))
 
 
 ## A failure from the add-on as a sentence for a player (PLAYER_MESSAGES); a failure it doesn't know

@@ -1615,24 +1615,9 @@ func _on_battle_action(action: String, arg: Variant) -> void:
 			_battle_key(KEY_ESCAPE)
 
 
-## Before an online Host or Join: a player WASD said isn't signed in, and gave a sign-in page for,
-## gets that page in a new tab on this press (a browser opens tabs only right after a key press or
-## click). Returns true when it opened, and the press does nothing else.
-func _battle_open_sign_in() -> bool:
-	if not Battle.online_available() or Battle.sign_in_url.is_empty():
-		return false
-	OS.shell_open(Battle.sign_in_url)
-	Battle.sign_in_url = ""
-	_battle_message = "Sign in to WASD Engine in the new tab, then come back here and press H to host or J to join."
-	_present_battle()
-	return true
-
-
 ## J or the Join card: the box for the lobby code (online) or the host's address (LAN). Online, the
 ## player signs in to WASD now, from this press, so a sign-in problem shows before they type a code.
 func _battle_open_join() -> void:
-	if _battle_open_sign_in():
-		return
 	_battle_input = "code" if Battle.online_available() else "address"
 	_battle_message = ""
 	if not Battle.online_available():
@@ -1652,8 +1637,6 @@ func _battle_open_join() -> void:
 
 func _battle_host() -> void:
 	_battle_message = ""
-	if _battle_open_sign_in():
-		return
 	if Battle.online_available():
 		_battle_busy = true
 		_battle_message = "Signing in with WASD Engine and opening a lobby..."
@@ -1671,8 +1654,6 @@ func _battle_host() -> void:
 
 func _battle_join(text: String) -> void:
 	text = text.strip_edges()
-	if _battle_open_sign_in():
-		return
 	if Battle.online_available():
 		if text.length() != 6:
 			_battle_message = "A lobby code has six letters."

@@ -313,11 +313,14 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 			box(s, DRIVE.grow(spread), Color(MINT, 0.05), Color.TRANSPARENT, 0.0, 40.0 + spread)
 	box(s, DRIVE, MINT if ready else Color(FROST, 0.08), Color.TRANSPARENT if ready else Color(FROST, 0.3), 0.0 if ready else 1.0, 40.0)
 	var label: String = drive_label(m)
-	var f: Font = font("Outfit", 600, 8.0)
-	var label_w: float = text_width(label, f, 24)
-	var left: float = DRIVE.position.x + (DRIVE.size.x - label_w - (46.0 if ready else 0.0)) * 0.5
-	text(s, Rect2(left, DRIVE.position.y, label_w, DRIVE.size.y), label, f, 24, BG if ready else SAGE)
-	if ready:
+	var with_arrow: bool = drive_arrow(m)
+	var fitted: Array = fit_button_label(label, "Outfit", 600, [8.0, 5.0, 3.0], 24, DRIVE.size.x - 64.0 - (46.0 if with_arrow else 0.0))
+	var f: Font = fitted[0]
+	var size: int = fitted[1]
+	var label_w: float = text_width(label, f, size)
+	var left: float = DRIVE.position.x + (DRIVE.size.x - label_w - (46.0 if with_arrow else 0.0)) * 0.5
+	text(s, Rect2(left, DRIVE.position.y, label_w, DRIVE.size.y), label, f, size, BG if ready else SAGE)
+	if with_arrow:
 		arrow(s, Rect2(left + label_w + 16, DRIVE.position.y + 32, 30, 16), BG, 2.5)
 
 
@@ -333,7 +336,7 @@ func _battle(s: RouteScreen, m: Dictionary) -> void:
 	box(s, BATTLE, Color(BG, 0.8), Color.TRANSPARENT, 0.0, 21.0)
 	box(s, BATTLE, Color(MINT, 0.06), Color(MINT, 0.7), 1.0, 21.0)
 	battle_contents(s, BATTLE, m, [font("Azeret Mono"), 10, SAGE, Color.TRANSPARENT, Color(FROST, 0.35), 4.0],
-		[font("Outfit", 400), 16, MINT], [font("Azeret Mono"), 12, MIST, "race friends"], true)
+		[font("Outfit", 500), 19, MINT], [font("Azeret Mono"), 12, MIST, "race friends"], true)
 
 
 

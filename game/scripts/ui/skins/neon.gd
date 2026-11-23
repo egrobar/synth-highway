@@ -448,13 +448,17 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 	poly(s, _skew_shadow(DRIVE, 14.0, Vector2(8, 8)), BG)
 	poly(s, skewed(DRIVE, 14.0), ACID if ready else EDGE)
 	var label: String = drive_label(m)
-	var f: Font = font("Anton", 400, 2.0)
-	var label_w: float = text_width(label, f, 44)
-	var total: float = label_w + (18.0 + 46.0 if ready else 0.0)
+	var with_arrow: bool = drive_arrow(m)
+	# The slab's slant eats about 40 px at each end.
+	var fitted: Array = fit_button_label(label, "Anton", 400, [2.0, 1.0], 44, DRIVE.size.x - 90.0 - (64.0 if with_arrow else 0.0))
+	var f: Font = fitted[0]
+	var size: int = fitted[1]
+	var label_w: float = text_width(label, f, size)
+	var total: float = label_w + (18.0 + 46.0 if with_arrow else 0.0)
 	var left: float = DRIVE.get_center().x - total * 0.5
-	var label_h: float = f.get_height(44)
-	text(s, Rect2(left, DRIVE.get_center().y - label_h * 0.5, label_w + 4.0, label_h), label, f, 44, BG if ready else MUTED)
-	if ready:
+	var label_h: float = f.get_height(size)
+	text(s, Rect2(left, DRIVE.get_center().y - label_h * 0.5, label_w + 4.0, label_h), label, f, size, BG if ready else MUTED)
+	if with_arrow:
 		var o := Vector2(left + label_w + 18.0, DRIVE.get_center().y - 14.0)
 		s.draw_rect(Rect2(o + Vector2(2, 11.5), Vector2(38, 5)), BG)
 		var head := PackedVector2Array()

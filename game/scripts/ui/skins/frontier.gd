@@ -267,11 +267,14 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 	hard_shadow(s, DRIVE, Vector2(0, 6), EDGE, 40.0)
 	box(s, DRIVE, AMBER if ready else Color("#8A7A6A"), EDGE, 3.0, 40.0)
 	var label: String = drive_label(m)
-	var f: Font = font("Alfa Slab One", 400, 2.0)
-	var label_w: float = text_width(label, f, 34)
-	var left: float = DRIVE.position.x + (DRIVE.size.x - label_w - (50.0 if ready else 0.0)) * 0.5
-	text(s, Rect2(left, DRIVE.position.y, label_w, DRIVE.size.y), label, f, 34, INK)
-	if ready:
+	var with_arrow: bool = drive_arrow(m)
+	var fitted: Array = fit_button_label(label, "Alfa Slab One", 400, [2.0, 1.0], 34, DRIVE.size.x - 56.0 - (50.0 if with_arrow else 0.0))
+	var f: Font = fitted[0]
+	var size: int = fitted[1]
+	var label_w: float = text_width(label, f, size)
+	var left: float = DRIVE.position.x + (DRIVE.size.x - label_w - (50.0 if with_arrow else 0.0)) * 0.5
+	text(s, Rect2(left, DRIVE.position.y, label_w, DRIVE.size.y), label, f, size, INK)
+	if with_arrow:
 		arrow(s, Rect2(left + label_w + 16, DRIVE.position.y + 29, 34, 22), INK, 4.0)
 
 

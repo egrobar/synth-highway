@@ -459,17 +459,20 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 	else:
 		box(s, DRIVE, Color(Color("#2A4048"), 0.92), Color(FOAM, 0.25), 1.0, 40.0)
 	var label: String = drive_label(m)
-	var f: Font = font("Manrope", 800, 5.0)
-	var label_w: float = text_width(label, f, 24)
-	var extra: float = 42.0 if ready else (22.0 if locked else 0.0)
+	var with_arrow: bool = drive_arrow(m)
+	var extra: float = 42.0 if with_arrow else (22.0 if locked else 0.0)
+	var fitted: Array = fit_button_label(label, "Manrope", 800, [5.0, 3.0, 2.0], 24, DRIVE.size.x - 64.0 - extra)
+	var f: Font = fitted[0]
+	var size: int = fitted[1]
+	var label_w: float = text_width(label, f, size)
 	var left: float = DRIVE.position.x + (DRIVE.size.x - label_w - extra) * 0.5
 	var mid: float = DRIVE.get_center().y
 	var ink: Color = INK if ready else SLATE
 	if locked:
 		_padlock(s, Vector2(left + 6.0, mid), ink, 1.6)
 		left += 22.0
-	text(s, Rect2(left, DRIVE.position.y, label_w + 1.0, DRIVE.size.y), label, f, 24, ink)
-	if ready:
+	text(s, Rect2(left, DRIVE.position.y, label_w + 1.0, DRIVE.size.y), label, f, size, ink)
+	if with_arrow:
 		arrow(s, Rect2(left + label_w + 14.0 + 1.0, mid - 8.0, 24, 16), INK, 3.0)
 
 
@@ -487,7 +490,7 @@ func _hints(s: RouteScreen, m: Dictionary) -> void:
 func _battle(s: RouteScreen, m: Dictionary) -> void:
 	box(s, BATTLE, GLASS, Color(CORAL, 0.8), 1.0, 21.0)
 	battle_contents(s, BATTLE, m, [font("Manrope", 500), 11, SLATE, Color.TRANSPARENT, Color(FOAM, 0.3), 4.0],
-		[font("Manrope", 700), 15, CORAL], [font("Manrope", 600), 14, MIST, "race friends"], true)
+		[font("Manrope", 700), 17, CORAL], [font("Manrope", 600), 14, MIST, "race friends"], true)
 
 
 ## A passing note (an import finished, a song removed): a frosted chip on the sea, right of the

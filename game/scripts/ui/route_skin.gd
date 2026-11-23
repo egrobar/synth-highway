@@ -27,7 +27,8 @@ extends RefCounted
 ##   message   a passing note to show (an import finished, a song removed), or ""
 ##   battle    {text ("BATTLE", or "BACK TO LOBBY" while picking a battle's song), key ("B")}:
 ##             the button at the right end of the hints row (battle_contents)
-##   drive_text what Enter Drive reads instead ("ENTER PICK SONG" while picking), or ""
+##   drive_text what Enter Drive reads instead ("ADD SONG TO PARTY [ENTER]" while picking; it names
+##             its own key, so the skins leave off their arrow), or ""
 ##   pick      true while picking a battle's song: no Practice or Load, and the hints are the
 ##             picker's (hint_items)
 ## Actions a skin can register: "region" (index), "song" (index), "difficulty" ("easy",
@@ -136,8 +137,8 @@ static func battle_contents(c: CanvasItem, rect: Rect2, m: Dictionary, cap: Arra
 static func hint_items(m: Dictionary, words: Dictionary = {}) -> Array:
 	var items: Array = []
 	if m.get("pick", false):
-		# B goes back to the lobby too, but the Back to lobby button beside the row already says so.
-		items = [["← →", "REGION"], ["↑ ↓", "SONG"], ["ENTER", "PICK IT"]]
+		# Enter and B are on the buttons beside the row (Add song to party, Back to lobby).
+		items = [["← →", "REGION"], ["↑ ↓", "SONG"]]
 	else:
 		items = [["← →", "REGION"], ["↑ ↓", "SONG"], ["TAB", "DIFFICULTY"], ["P", "PRACTICE"], ["M", "MAP"],
 			[Ui.back_key(), "MENU"]]
@@ -168,6 +169,27 @@ static func fit_size(value: String, f: Font, preferred: int, width: float, small
 	while size > smallest and text_width(value, f, size) > width:
 		size -= 1
 	return size
+
+
+## The font and size for the big Enter button's `label` in `width`: the design's letter spacing
+## first, then the tighter ones in `spacings`, whichever sets the label biggest (a long label such
+## as "ADD SONG TO PARTY [ENTER]" would otherwise shrink to nothing in a widely tracked face).
+static func fit_button_label(label: String, family: String, weight: int, spacings: Array, preferred: int,
+		width: float) -> Array:
+	var best_font: Font = font(family, weight, float(spacings[0]))
+	var best_size: int = 0
+	for spacing: Variant in spacings:
+		var f: Font = font(family, weight, float(spacing))
+		var size: int = fit_size(label, f, preferred, width, 10)
+		if size > best_size:
+			best_size = size
+			best_font = f
+	return [best_font, best_size]
+
+
+## True when the big Enter button gets the skin's arrow: not when its label names its own key.
+static func drive_arrow(m: Dictionary) -> bool:
+	return not m["locked"] and not (m["song"] as Dictionary).is_empty() and str(m.get("drive_text", "")).is_empty()
 
 
 ## What the big Enter button reads.

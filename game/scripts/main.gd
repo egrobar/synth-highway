@@ -679,8 +679,7 @@ func _show_route(message: String = "") -> void:
 	if _battle_pick:
 		# Your own songs are only on your computer, so they can't be raced: the picker leaves them out.
 		_songs = _songs.filter(func(song: Dictionary) -> bool: return song["source"] != "imported")
-		if message.is_empty():
-			message = "Pick a song for the battle: ENTER puts it in the draw."
+		# No instruction note: the big button says it all ("2 bubbles with same info": playtest).
 	# The song select is a full-screen illustrated skin (RouteScreen; the Song Select Redesigns
 	# canvas), so the 3D world is neither built nor drawn behind it: switching regions here
 	# no longer rebuilds a whole world. The region's ambience still plays.
@@ -860,7 +859,7 @@ func _route_model(message: String) -> Dictionary:
 		# The battle button in the hints row (RouteSkin.BATTLE): into a battle, or while picking the
 		# battle's song, back to its lobby; and while picking, Enter puts the song in the draw.
 		"battle": {"text": "BACK TO LOBBY" if _battle_pick else "BATTLE", "key": "B"},
-		"drive_text": "ENTER PICK SONG" if _battle_pick else "",
+		"drive_text": "ADD SONG TO PARTY [ENTER]" if _battle_pick else "",
 		# The battle song picker (RouteSkin.hint_items): no practice or loading, its own hints.
 		"pick": _battle_pick,
 	}

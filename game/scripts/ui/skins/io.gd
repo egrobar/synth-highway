@@ -402,13 +402,10 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 	box(s, DRIVE.grow(-2.0), Color.TRANSPARENT, RIM, 1.0)
 	s.draw_texture_rect(_button(ready), Rect2(DRIVE.position.x + 24.0, DRIVE.position.y + 8.0, 64, 64), false)
 	var label: String = drive_label(m)
-	var f: Font = font("Saira Stencil One", 400, 2.0)
 	var left: float = DRIVE.position.x + 24.0 + 64.0 + 22.0
 	var avail: float = DRIVE.end.x - 24.0 - left
-	var size: int = 40
-	while size > 24 and text_width(label, f, size) > avail:
-		size -= 2
-	text(s, Rect2(left, DRIVE.position.y, avail, DRIVE.size.y), label, f, size, SULPHUR if ready else GRIP)
+	var fitted: Array = fit_button_label(label, "Saira Stencil One", 400, [2.0, 1.0], 40, avail)
+	text(s, Rect2(left, DRIVE.position.y, avail, DRIVE.size.y), label, fitted[0], fitted[1], SULPHUR if ready else GRIP)
 
 
 func _hints(s: RouteScreen, m: Dictionary) -> void:

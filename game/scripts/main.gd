@@ -1,7 +1,9 @@
 extends Node
 ## Game flow: title → the route (regions and their songs on one screen) → drive →
 ## results; plus settings (which holds the timing check) and loading your own song.
-## The selected region's world keeps rolling behind every screen.
+## The selected region's world keeps rolling behind every screen. The title (TitleMenu) offers
+## Drive and Battle as two big cards, with How to play, Settings and Quit under them; How to play
+## (the home-row guide) also shows before a new player's first drive.
 ##
 ## A song can be driven for a score or as a practice run (P on the route, or on
 ## the results screen after running out of gas): no fail, optionally slower, never
@@ -16,11 +18,12 @@ extends Node
 ## the right.
 ##
 ## The regions sit on one loop (RouteLoop). A new player picks where to start on the loop map
-## (LoopMap, shown after the title until a start is picked, and on M from the route); clearing
+## (LoopMap, shown after the title and How to play until a start is picked, and on M from the route); clearing
 ## two songs in an open region opens the next one clockwise. Until they clear a song, the
 ## player can still move their start.
 ##
-## Battles (B on the title; scripts/battle/): up to four players race the same song at the same
+## Battles (the title's Battle card, B on the title or the route, the route's Battle button, or
+## the Escape menu; scripts/battle/): up to four players race the same song at the same
 ## moment and the highest score wins. The battle screens (BattleScreen) host or join, show the lobby
 ## and the standings; the route doubles as the song picker for the draw (_battle_pick), and a race
 ## is an ordinary run with the battle options (no pause, a lead-in that ends on the race's start)
@@ -43,7 +46,7 @@ extends Node
 ##                          suggest a song by itself, and as host draw once PLAYERS (2) are in;
 ##                          a bot plays the race. A WASD multiplayer test run does this on its own.
 
-enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS, SETTINGS, MAP, BATTLE }
+enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS, SETTINGS, MAP, BATTLE, HOWTO }
 
 ## P on the route steps through these: off, then practice at each speed.
 const PRACTICE_SPEEDS: Array[float] = [0.0, 1.0, 0.85, 0.7]
@@ -101,12 +104,16 @@ var _calib_done: bool = false
 var _toast: Label
 ## The Escape menu on the title and route screens, while it is open.
 var _menu: MenuOverlay
+var _title: TitleMenu
 var _map: LoopMap
 # Battles (see the top, and scripts/battle/battle.gd).
 var _battle_screen: BattleScreen
 ## Which box the connect screen has open: "", "code" (online) or "address" (LAN).
 var _battle_input: String = ""
 var _battle_message: String = ""
+## Where Escape goes from the battle's connect screen, and where leaving a battle lands: the title
+## or the song select, whichever it was opened from.
+var _battle_back: Callable
 var _battle_busy: bool = false
 ## The route is picking a song for the battle's draw, not starting a drive.
 var _battle_pick: bool = false
@@ -307,21 +314,30 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	match _screen:
 		Screen.TITLE:
-			if code == KEY_SPACE or code == KEY_ENTER:
+			# Arrows and Enter go to the menu (TitleMenu); every item also has its own key.
+			if _title and _title.handle_key(code):
+				return
+			match code:
+				KEY_SPACE:
+					_on_title_action("drive")
+				KEY_B:
+					_on_title_action("battle")
+				KEY_H:
+					_on_title_action("how")
+				KEY_S:
+					_on_title_action("settings")
+				KEY_Q:
+					if Ui.can_quit():
+						_on_title_action("quit")
+				KEY_ESCAPE:
+					_open_menu()
+		Screen.HOWTO:
+			if code == KEY_ENTER or code == KEY_KP_ENTER or code == KEY_SPACE:
 				_click()
-				# A player who has not picked a start yet sees the loop map first.
-				if _start_index() < 0 and not _options.has("unlock-all"):
-					_show_map(_show_title)
-				else:
-					_show_route()
-			elif code == KEY_S:
-				_click()
-				_open_settings(_show_title)
-			elif code == KEY_B:
-				_click()
-				_show_battle()
+				_drive_from_title(false)
 			elif code == KEY_ESCAPE:
-				_open_menu()
+				_click()
+				_show_title()
 		Screen.BATTLE:
 			_battle_key(code)
 		Screen.ROUTE:
@@ -371,6 +387,7 @@ func _clear_ui() -> void:
 	_toast = null
 	_battle_screen = null
 	_rival_bar = null
+	_title = null
 
 
 func _end_session() -> void:
@@ -469,21 +486,105 @@ func _on_click(control: Control, action: Callable) -> void:
 
 # ---------------------------------------------------------------- title
 
+## The title: Drive and Battle side by side as big cards, with How to play, Settings and Quit
+## under them (TitleMenu). The home-row guide that used to fill the title is How to play's now,
+## and a new player sees it before their first drive.
 func _show_title() -> void:
 	_end_session()
 	_clear_ui()
 	_screen = Screen.TITLE
 	_show_world(_regions[_region_index]["id"])
 	_ambient.volume_db = -9.0
-	_ui.add_child(Ui.dim_panel(0.3))
-	var logo := Ui.image("res://assets/textures/logo.png")
-	Ui.anchor(logo, 0.5, 0.0, 0.5, 0.0, -500, 40, 500, 300)
-	_ui.add_child(logo)
-	var line := Ui.label("A night drive in five regions, played on your keyboard's home row.", 32, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(line, 0.0, 0.0, 1.0, 0.0, 0, 300, 0, 348, HORIZONTAL_ALIGNMENT_CENTER)
-	_ui.add_child(line)
-	_ui.add_child(_home_row_guide(400.0))
-	_hint("SPACE  start        B  battle        S  settings        ESC  menu")
+	_title = TitleMenu.new()
+	_title.acted.connect(_on_title_action)
+	_title.moved.connect(_click)
+	_ui.add_child(_title)
+	_title.present(_title_model())
+
+
+func _title_model() -> Dictionary:
+	var built_in: int = SongLibrary.all().filter(func(s: Dictionary) -> bool: return s["source"] != "imported").size()
+	var cleared: int = 0
+	for count: int in _region_clears():
+		cleared += count
+	var drive_status: String = "First drive: pick where you start on the loop."
+	if _start_index() >= 0 or _options.has("unlock-all"):
+		drive_status = "Back to %s  ·  %d songs cleared" % [str(_regions[_region_index]["name"]), cleared]
+	var battle_status: String = "Needs the browser version, or the same network."
+	if Battle.phase != Battle.Phase.NONE:
+		battle_status = "You're in a battle: back to the lobby."
+	elif Battle.online_available():
+		battle_status = "Online: friends join with your code."
+	elif Battle.lan_available():
+		battle_status = "Same Wi-Fi: friends join by address."
+	return {
+		"drive": {"line": "On your own, round the loop: %d songs across five regions." % built_in, "status": drive_status},
+		"battle": {"line": "Race up to 3 friends through one song, all at once.", "status": battle_status, "new": true},
+		"can_quit": Ui.can_quit(),
+	}
+
+
+func _on_title_action(action: String) -> void:
+	_click()
+	match action:
+		"drive":
+			_drive_from_title(true)
+		"battle":
+			_open_battle(_show_title)
+		"how":
+			_show_how_to_play()
+		"settings":
+			_open_settings(_show_title)
+		"quit":
+			get_tree().quit()
+
+
+## Drive on the title: the song select, or for a player who has not picked a start yet, How to
+## play (when `teach`) and then the loop map.
+func _drive_from_title(teach: bool) -> void:
+	if _start_index() < 0 and not _options.has("unlock-all"):
+		if teach:
+			_show_how_to_play()
+		else:
+			_show_map(_show_title)
+	else:
+		_show_route()
+
+
+## How to play: what the notes are, the home row with each finger's colour, and gas. A new player
+## sees it on their first Drive; anyone can open it from the title.
+func _show_how_to_play() -> void:
+	_end_session()
+	_clear_ui()
+	_screen = Screen.HOWTO
+	_show_world(_regions[_region_index]["id"])
+	_ambient.volume_db = -9.0
+	_ui.add_child(Ui.dim_panel(0.62))
+	var heading := Ui.heading("HOW TO PLAY", 84, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 56, 0, 156, HORIZONTAL_ALIGNMENT_CENTER)
+	_ui.add_child(heading)
+	var intro := Ui.label("Notes roll down the highway to the keyboard at its foot. Press each one's key as it arrives.",
+		28, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(intro, 0.0, 0.0, 1.0, 0.0, 40, 170, -40, 212, HORIZONTAL_ALIGNMENT_CENTER)
+	_ui.add_child(intro)
+	_ui.add_child(_home_row_guide(236.0))
+	var gas := Ui.label("Hits keep your tank full and misses drain it: run out of gas and the drive is over. Hold long notes to their end.",
+		24, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(gas, 0.0, 0.0, 1.0, 0.0, 40, 512, -40, 550, HORIZONTAL_ALIGNMENT_CENTER)
+	_ui.add_child(gas)
+	var go := Ui.card(true)
+	Ui.anchor(go, 0.5, 0.0, 0.5, 0.0, -230, 600, 230, 676)
+	_on_click(go, func() -> void:
+		_click()
+		_drive_from_title(false))
+	_ui.add_child(go)
+	var go_key := Ui.caption("ENTER", 22, Ui.ACCENT)
+	Ui.anchor(go_key, 0.0, 0.0, 0.0, 1.0, 26, 24, 120, -22)
+	go.add_child(go_key)
+	var go_text := Ui.label("Let's drive", 34, Ui.TEXT)
+	Ui.anchor(go_text, 0.0, 0.0, 1.0, 1.0, 132, 10, -20, -10)
+	go.add_child(go_text)
+	_hint("ENTER  drive        ESC  back")
 
 
 ## The ten keys, as they sit under your hands: fingers rest on A S D F and J K L ;,
@@ -733,6 +834,10 @@ func _route_model(message: String) -> Dictionary:
 		"rows": rows, "count": _songs.size(), "song": detail, "cards": cards,
 		"practice": {"on": practising, "text": ("%d%% speed" % int(round(PRACTICE_SPEEDS[_practice_step] * 100.0))) if practising else "off"},
 		"locked": not unlocked, "message": message,
+		# The battle button in the hints row (RouteSkin.BATTLE): into a battle, or while picking the
+		# battle's song, back to its lobby; and while picking, Enter puts the song in the draw.
+		"battle": {"text": "BACK TO LOBBY" if _battle_pick else "BATTLE", "key": "B"},
+		"drive_text": "ENTER PICK SONG" if _battle_pick else "",
 	}
 
 
@@ -835,6 +940,10 @@ func _on_route_action(action: String, arg: Variant) -> void:
 				return
 			"practice", "load":
 				return
+			"battle":
+				_click()
+				_show_battle()
+				return
 	match action:
 		"region":
 			if int(arg) != _region_index:
@@ -863,7 +972,9 @@ func _on_route_action(action: String, arg: Variant) -> void:
 			_drive_selected()
 		"load":
 			_open_file_picker()
-
+		"battle":
+			_click()
+			_open_battle(_show_route)
 
 
 func _route_key(code: Key) -> void:
@@ -897,6 +1008,9 @@ func _route_key(code: Key) -> void:
 		KEY_L:
 			_click()
 			_open_file_picker()
+		KEY_B:
+			_click()
+			_open_battle(_show_route)
 		KEY_P:
 			_click()
 			_step_practice()
@@ -920,6 +1034,9 @@ func _open_menu() -> void:
 	var back: Callable = _show_title if _screen == Screen.TITLE else _show_route
 	var items: Array[Dictionary] = [
 		{"text": "Resume", "key_text": Ui.back_key(), "action": _close_menu},
+		{"text": "Battle", "key": KEY_B, "key_text": "B", "action": func() -> void:
+			_close_menu()
+			_open_battle(back)},
 		{"text": "Settings", "key": KEY_S, "key_text": "S", "action": func() -> void:
 			_close_menu()
 			_open_settings(back)},
@@ -1331,6 +1448,20 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: String) ->
 
 ## The battle screens (BattleScreen) for wherever the battle is: connecting, the lobby, or the
 ## standings after a race. The region's world rolls on behind, as on the title.
+## Opens the battle screens from the title or the song select; `back` is where Escape returns to
+## before joining one, and where leaving one lands.
+func _open_battle(back: Callable) -> void:
+	_battle_back = back
+	_show_battle()
+
+
+func _battle_exit() -> void:
+	if _battle_back.is_valid():
+		_battle_back.call()
+	else:
+		_show_title()
+
+
 func _show_battle() -> void:
 	_end_session()
 	_battle_pick = false
@@ -1426,7 +1557,7 @@ func _battle_key(code: Key) -> void:
 				_click()
 				_battle_message = ""
 				_battle_input = ""
-				_show_title()
+				_battle_exit()
 		Battle.Phase.LOBBY:
 			match code:
 				KEY_S:
@@ -1474,6 +1605,9 @@ func _on_battle_action(action: String, arg: Variant) -> void:
 			_show_route()
 		"draw":
 			Battle.draw()
+		"back":
+			# The Back / Leave button does what Escape does on that screen.
+			_battle_key(KEY_ESCAPE)
 
 
 func _battle_host() -> void:
@@ -1522,7 +1656,7 @@ func _battle_pick_key(code: Key) -> void:
 	match code:
 		KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
 			_battle_suggest_selected()
-		KEY_ESCAPE:
+		KEY_ESCAPE, KEY_B:
 			_click()
 			_show_battle()
 		KEY_P, KEY_L, KEY_X, KEY_S, KEY_M, KEY_TAB:
@@ -1602,7 +1736,7 @@ func _leave_battle(message: String) -> void:
 	_battle_racing = false
 	Battle.leave()
 	_battle_message = ""
-	_show_title()
+	_battle_exit()
 	_show_toast(message)
 
 

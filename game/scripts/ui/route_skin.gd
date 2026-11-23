@@ -25,8 +25,11 @@ extends RefCounted
 ##   practice  {on, text ("off" or "85% speed")}
 ##   locked    true when the region is not open yet (Enter Drive reads LOCKED)
 ##   message   a passing note to show (an import finished, a song removed), or ""
+##   battle    {text ("BATTLE", or "BACK TO LOBBY" while picking a battle's song), key ("B")}:
+##             the button at the right end of the hints row (battle_contents)
+##   drive_text what Enter Drive reads instead ("ENTER PICK SONG" while picking), or ""
 ## Actions a skin can register: "region" (index), "song" (index), "difficulty" ("easy",
-## "normal" or "hard"), "practice", "drive", "load".
+## "normal" or "hard"), "practice", "drive", "load", "battle".
 
 const W := 1280.0
 const H := 720.0
@@ -44,6 +47,9 @@ const CARDS: Array[Rect2] = [Rect2(580, 350, 207, 140), Rect2(807, 350, 206, 140
 const PRACTICE := Rect2(580, 512, 180, 80)
 const DRIVE := Rect2(776, 512, 464, 80)
 const HINTS_Y := 660.0
+## Battle, at the right end of the hints row (added 2026-11-23: nothing past the title showed
+## battles). Right of every skin's hints, below its passing message (y 604-646).
+const BATTLE := Rect2(1010, 654, 230, 42)
 const DASH := "–"
 
 ## The fill outside the 1280x720 design when the window is a different shape.
@@ -80,6 +86,52 @@ static func register_hits(screen: RouteScreen, m: Dictionary) -> void:
 			screen.hit(CARDS[i], "difficulty", str((cards[i] as Dictionary).get("key", Chart.DIFFICULTIES[i])))
 		screen.hit(PRACTICE, "practice")
 		screen.hit(DRIVE, "drive")
+	screen.hit(BATTLE, "battle")
+
+
+## The Battle button's contents inside `rect`, over the frame the skin drew: a key cap, the label,
+## and a short note at the right end when the label is Battle's own.
+##   cap   [font, size, ink, fill, edge, radius]
+##   label [font, size, colour]; `sentence` sets "BACK TO LOBBY" as "Back to lobby" for the skins
+##         whose buttons are in sentence case
+##   note  [font, size, colour, text]
+static func battle_contents(c: CanvasItem, rect: Rect2, m: Dictionary, cap: Array, label: Array, note: Array,
+		sentence: bool = false) -> void:
+	var battle: Dictionary = m.get("battle", {})
+	var key: String = str(battle.get("key", "B"))
+	var cap_font: Font = cap[0]
+	var cap_size: int = int(cap[1])
+	var edge: Color = cap[4]
+	var cap_w: float = maxf(text_width(key, cap_font, cap_size) + 14.0, 26.0)
+	var cap_rect := Rect2(rect.position.x + 14.0, rect.get_center().y - 12.0, cap_w, 24.0)
+	box(c, cap_rect, cap[3], edge, 1.0 if edge.a > 0.0 else 0.0, float(cap[5]))
+	text(c, cap_rect, key, cap_font, cap_size, cap[2], HORIZONTAL_ALIGNMENT_CENTER)
+	var title: String = str(battle.get("text", "BATTLE"))
+	var own: bool = title == "BATTLE"
+	if sentence:
+		title = title.left(1) + title.substr(1).to_lower()
+	var left: float = cap_rect.end.x + 12.0
+	var right: float = rect.end.x - 14.0
+	if own:
+		var note_font: Font = note[0]
+		var note_w: float = text_width(str(note[3]), note_font, int(note[1]))
+		text(c, Rect2(right - note_w, rect.position.y, note_w + 1.0, rect.size.y), str(note[3]), note_font, int(note[1]), note[2])
+		right -= note_w + 10.0
+	# A longer label ("Back to lobby") steps its size down until it fits rather than cutting off.
+	var label_font: Font = label[0]
+	var label_size: int = int(label[1])
+	while label_size > 11 and text_width(title, label_font, label_size) > right - left:
+		label_size -= 1
+	text(c, Rect2(left, rect.position.y, right - left, rect.size.y), title, label_font, label_size, label[2])
+
+
+## What the big Enter button reads.
+static func drive_label(m: Dictionary) -> String:
+	if m["locked"]:
+		return "LOCKED"
+	if not str(m.get("drive_text", "")).is_empty():
+		return str(m["drive_text"])
+	return "ENTER PRACTICE" if m["practice"]["on"] else "ENTER DRIVE"
 
 
 # ---------------------------------------------------------------- text

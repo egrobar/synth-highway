@@ -43,6 +43,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 		_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
+	_battle(s, m)
 	if not str(m.get("message", "")).is_empty():
 		_message(s, str(m["message"]))
 	register_hits(s, m)
@@ -263,7 +264,7 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 	var ready: bool = not m["locked"] and not (m["song"] as Dictionary).is_empty()
 	hard_shadow(s, DRIVE, Vector2(0, 6), EDGE, 40.0)
 	box(s, DRIVE, AMBER if ready else Color("#8A7A6A"), EDGE, 3.0, 40.0)
-	var label: String = "LOCKED" if m["locked"] else ("ENTER PRACTICE" if m["practice"]["on"] else "ENTER DRIVE")
+	var label: String = drive_label(m)
 	var f: Font = font("Alfa Slab One", 400, 2.0)
 	var label_w: float = text_width(label, f, 34)
 	var left: float = DRIVE.position.x + (DRIVE.size.x - label_w - (50.0 if ready else 0.0)) * 0.5
@@ -284,6 +285,14 @@ func _hints(s: RouteScreen, m: Dictionary) -> void:
 	s.draw_rect(Rect2(0, 0, w, 1), Color(1, 1, 1, 0.12))
 	text(s, Rect2(14, 0, w - 28, 30), line, f, 12, Color("#F4EDE4"))
 	s.end_local()
+
+## Battle, at the right end of the hints row: a vinyl-brown plate edged in amber.
+func _battle(s: RouteScreen, m: Dictionary) -> void:
+	hard_shadow(s, BATTLE, Vector2(0, 4), EDGE, 6.0)
+	box(s, BATTLE, BG, AMBER, 2.0, 6.0)
+	battle_contents(s, BATTLE, m, [font("Oswald", 600), 14, INK, CREAM, Color.TRANSPARENT, 3.0],
+		[font("Alfa Slab One", 400, 1.0), 18, AMBER], [font("Oswald"), 13, DUST, "race friends"])
+
 
 
 func _message(s: RouteScreen, message: String) -> void:

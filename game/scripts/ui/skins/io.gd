@@ -57,6 +57,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 		_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
+	_battle(s, m)
 	if not str(m.get("message", "")).is_empty():
 		_message(s, str(m["message"]))
 	register_hits(s, m)
@@ -395,7 +396,7 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 	box(s, DRIVE, PANEL, INK, 2.0)
 	box(s, DRIVE.grow(-2.0), Color.TRANSPARENT, RIM, 1.0)
 	s.draw_texture_rect(_button(ready), Rect2(DRIVE.position.x + 24.0, DRIVE.position.y + 8.0, 64, 64), false)
-	var label: String = "LOCKED" if m["locked"] else ("ENTER PRACTICE" if m["practice"]["on"] else "ENTER DRIVE")
+	var label: String = drive_label(m)
 	var f: Font = font("Saira Stencil One", 400, 2.0)
 	var left: float = DRIVE.position.x + 24.0 + 64.0 + 22.0
 	var avail: float = DRIVE.end.x - 24.0 - left
@@ -419,6 +420,14 @@ func _hints(s: RouteScreen, m: Dictionary) -> void:
 		s.draw_circle(Vector2(rx, cy), 2.6, Color("#8A857A"), true, -1.0, true)
 		s.draw_circle(Vector2(rx - 0.7, cy - 0.7), 1.1, Color("#F2EDE2"), true, -1.0, true)
 	text(s, Rect2(plate.position.x + 16.0, plate.position.y + 2.0, line_w + 1.0, plate.size.y - 4.0), line, f, 12, INK)
+
+
+## Battle, at the right end of the hints row: a steel panel with a stencilled label.
+func _battle(s: RouteScreen, m: Dictionary) -> void:
+	box(s, BATTLE, PANEL, INK, 2.0)
+	box(s, BATTLE.grow(-2.0), Color.TRANSPARENT, SULPHUR_LEDGE, 1.0)
+	battle_contents(s, BATTLE, m, [font("Oswald"), 12, DIM, Color.TRANSPARENT, GRIP, 0.0],
+		[font("Saira Stencil One", 400, 1.5), 18, SULPHUR], [font("Oswald", 500, 1.0), 12, MUTED, "RACE FRIENDS"])
 
 
 ## A passing note on a strip of phosphor, right-aligned between Enter Drive and the hints.

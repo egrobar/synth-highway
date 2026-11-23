@@ -73,6 +73,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 		_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
+	_battle(s, m)
 	if not str(m.get("message", "")).is_empty():
 		_message(s, str(m["message"]))
 	register_hits(s, m)
@@ -455,7 +456,7 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 		box(s, DRIVE, CORAL, Color.TRANSPARENT, 0.0, 40.0)
 	else:
 		box(s, DRIVE, Color(Color("#2A4048"), 0.92), Color(FOAM, 0.25), 1.0, 40.0)
-	var label: String = "LOCKED" if locked else ("ENTER PRACTICE" if m["practice"]["on"] else "ENTER DRIVE")
+	var label: String = drive_label(m)
 	var f: Font = font("Manrope", 800, 5.0)
 	var label_w: float = text_width(label, f, 24)
 	var extra: float = 42.0 if ready else (22.0 if locked else 0.0)
@@ -477,6 +478,13 @@ func _hints(s: RouteScreen, m: Dictionary) -> void:
 	if (m["song"] as Dictionary).get("imported", false):
 		line += "     X remove"
 	text(s, Rect2(40, 672, 1200, 17), line, font("Manrope"), 12, SLATE)
+
+
+## Battle, at the right end of the hints row: a frosted pill edged in coral.
+func _battle(s: RouteScreen, m: Dictionary) -> void:
+	box(s, BATTLE, GLASS, Color(CORAL, 0.8), 1.0, 21.0)
+	battle_contents(s, BATTLE, m, [font("Manrope", 500), 11, SLATE, Color.TRANSPARENT, Color(FOAM, 0.3), 4.0],
+		[font("Manrope", 700), 15, CORAL], [font("Manrope", 600), 12, MIST, "race friends"], true)
 
 
 ## A passing note (an import finished, a song removed): a frosted chip on the sea, right of the

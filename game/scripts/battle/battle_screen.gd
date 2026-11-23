@@ -8,6 +8,9 @@ extends Control
 ##   "standings": after your run, the live order while the others finish, then the final results.
 ## And the draw's reveal (play_reveal): the suggestions spin and land on the song that will be raced.
 ##
+## Every screen has a Back (or Leave) button in its top-left corner for the mouse, which acts as
+## Escape does ("back").
+##
 ## main.gd owns the keys and the network and calls present(model) whenever something changes; this
 ## only draws, and says what was clicked through `acted`. The models:
 ##   connect   {"kind", "online": bool, "lan": bool, "input": ""|"code"|"address", "busy": bool, "message"}
@@ -57,8 +60,10 @@ func has_input_focus() -> bool:
 # ---------------------------------------------------------------- connect
 
 func _draw_connect(model: Dictionary) -> void:
-	_content.add_child(Ui.dim_panel(0.55))
+	_content.add_child(Ui.dim_panel(0.62))
+	_back_button("Back")
 	_title("BATTLE", "Race up to three friends through the same song, at the same moment. Highest score wins.")
+	_steps(270.0)
 	var online: bool = bool(model.get("online", false))
 	var rows: Array = []
 	if online:
@@ -68,7 +73,7 @@ func _draw_connect(model: Dictionary) -> void:
 		rows.append(["H", "Host on this network", "Friends on the same Wi-Fi join with your address.", "host"])
 		rows.append(["J", "Join by address", "Type the address on the host's screen.", "join"])
 	for i: int in rows.size():
-		var top: float = 330.0 + i * 118.0
+		var top: float = 372.0 + i * 118.0
 		var card := Ui.card(false)
 		Ui.anchor(card, 0.5, 0.0, 0.5, 0.0, -420, top, 420, top + 100)
 		_clickable(card, str(rows[i][3]))
@@ -94,7 +99,7 @@ func _draw_connect(model: Dictionary) -> void:
 		_input.add_theme_font_size_override("font_size", 40)
 		_input.add_theme_stylebox_override("normal", Ui.card_style(true))
 		_input.add_theme_stylebox_override("focus", Ui.card_style(true))
-		Ui.anchor(_input, 0.5, 0.0, 0.5, 0.0, -240, 576, 240, 642)
+		Ui.anchor(_input, 0.5, 0.0, 0.5, 0.0, -240, 614, 240, 680)
 		_input.text_submitted.connect(func(text: String) -> void: acted.emit("submit", text))
 		_input.gui_input.connect(func(e: InputEvent) -> void:
 			if e is InputEventKey and e.pressed and (e as InputEventKey).physical_keycode == KEY_ESCAPE:
@@ -102,10 +107,10 @@ func _draw_connect(model: Dictionary) -> void:
 				acted.emit("cancel_input", null))
 		_content.add_child(_input)
 		_input.grab_focus.call_deferred()
-		_line("ENTER to join", 650.0, 20, Ui.MUTED)
+		_line("ENTER to join", 688.0, 20, Ui.MUTED)
 	var message: String = str(model.get("message", ""))
 	if not message.is_empty():
-		_line(message, 700.0, 26, Ui.WARM)
+		_line(message, 728.0, 26, Ui.WARM)
 	_hint("H  host        J  join        ESC  back" if not rows.is_empty() else "ESC  back")
 
 
@@ -113,8 +118,9 @@ func _draw_connect(model: Dictionary) -> void:
 
 func _draw_lobby(model: Dictionary) -> void:
 	_content.add_child(Ui.dim_panel(0.62))
+	_back_button("Leave")
 	var heading := Ui.heading("BATTLE LOBBY", 60, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 40, 0, 112, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 30, 0, 102, HORIZONTAL_ALIGNMENT_CENTER)
 	_content.add_child(heading)
 	var lan: bool = str(model.get("transport", "")) == "lan"
 	var code_box := Ui.card(true)
@@ -223,6 +229,7 @@ func _draw_lobby(model: Dictionary) -> void:
 
 func _draw_standings(model: Dictionary) -> void:
 	_content.add_child(Ui.dim_panel(0.7))
+	_back_button("Leave")
 	var final: bool = bool(model.get("final", false))
 	var heading := Ui.heading(str(model.get("headline", "")), 76, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 60, 0, 150, HORIZONTAL_ALIGNMENT_CENTER)
@@ -317,9 +324,48 @@ func play_reveal(titles: Array, chosen: int, title: String, subtitle: String, se
 
 func _title(text: String, sub: String) -> void:
 	var heading := Ui.heading(text, 110, Ui.TEXT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 90, 0, 220, HORIZONTAL_ALIGNMENT_CENTER)
+	Ui.anchor(heading, 0.0, 0.0, 1.0, 0.0, 0, 58, 0, 188, HORIZONTAL_ALIGNMENT_CENTER)
 	_content.add_child(heading)
-	_line(sub, 230.0, 28, Ui.TEXT)
+	_line(sub, 194.0, 28, Ui.TEXT)
+
+
+## How a battle goes, in three steps across the screen under the title.
+func _steps(top: float) -> void:
+	var steps: Array[String] = ["Host, or join a friend", "Everyone picks a song", "One is drawn: race it together"]
+	var step_w: float = 340.0
+	var gap: float = 40.0
+	var left: float = -(steps.size() * step_w + (steps.size() - 1) * gap) * 0.5
+	# One band behind all three, so the steps read as a set and not as more lines of text.
+	var band := Ui.card(false)
+	Ui.anchor(band, 0.5, 0.0, 0.5, 0.0, left - 26, top - 8, -left + 26, top + 62)
+	band.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_content.add_child(band)
+	for i: int in steps.size():
+		var x: float = left + i * (step_w + gap)
+		var number := Ui.heading(str(i + 1), 40, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+		Ui.anchor(number, 0.5, 0.0, 0.5, 0.0, x, top, x + 44, top + 54, HORIZONTAL_ALIGNMENT_CENTER)
+		_content.add_child(number)
+		var text := Ui.label(steps[i], 24, Ui.TEXT)
+		Ui.anchor(text, 0.5, 0.0, 0.5, 0.0, x + 52, top + 10, x + step_w, top + 48)
+		_content.add_child(text)
+		if i < steps.size() - 1:
+			var arrow := Ui.caption("›", 34, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+			Ui.anchor(arrow, 0.5, 0.0, 0.5, 0.0, x + step_w, top + 4, x + step_w + gap, top + 50, HORIZONTAL_ALIGNMENT_CENTER)
+			_content.add_child(arrow)
+
+
+## Back (or Leave) in the top-left corner, for the mouse: it does what Escape does.
+func _back_button(text: String) -> void:
+	var button := Ui.card(false)
+	Ui.anchor(button, 0.0, 0.0, 0.0, 0.0, 32, 28, 252, 82)
+	_clickable(button, "back")
+	_content.add_child(button)
+	var key := Ui.caption(Ui.back_key(), 18, Ui.MUTED)
+	Ui.anchor(key, 0.0, 0.0, 1.0, 1.0, 18, 16, -10, -14)
+	button.add_child(key)
+	var label := Ui.label(text, 26, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
+	Ui.anchor(label, 0.0, 0.0, 1.0, 1.0, 0, 8, -20, -8, HORIZONTAL_ALIGNMENT_RIGHT)
+	button.add_child(label)
 
 
 func _line(text: String, top: float, size: int, color: Color) -> void:

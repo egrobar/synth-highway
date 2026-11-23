@@ -64,6 +64,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 		_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
+	_battle(s, m)
 	if not str(m.get("message", "")).is_empty():
 		_message(s, str(m["message"]))
 	_matte(s)
@@ -444,7 +445,7 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 	var ready: bool = not m["locked"] and not (m["song"] as Dictionary).is_empty()
 	poly(s, _skew_shadow(DRIVE, 14.0, Vector2(8, 8)), BG)
 	poly(s, skewed(DRIVE, 14.0), ACID if ready else EDGE)
-	var label: String = "LOCKED" if m["locked"] else ("ENTER PRACTICE" if m["practice"]["on"] else "ENTER DRIVE")
+	var label: String = drive_label(m)
 	var f: Font = font("Anton", 400, 2.0)
 	var label_w: float = text_width(label, f, 44)
 	var total: float = label_w + (18.0 + 46.0 if ready else 0.0)
@@ -482,6 +483,13 @@ func _hints(s: RouteScreen, m: Dictionary) -> void:
 		else:
 			_halo_text(s, label, str(item[1]), f, 12, SOFT)
 		x += w + 22.0
+
+
+## Battle, at the right end of the hints row: a skewed black chip on the pink, in acid.
+func _battle(s: RouteScreen, m: Dictionary) -> void:
+	poly(s, skewed(BATTLE, 14.0), BG)
+	battle_contents(s, BATTLE, m, [font("JetBrains Mono", 500), 12, WHITE, BG, KEY_EDGE, 0.0],
+		[font("Anton", 400, 0.6), 20, ACID], [font("JetBrains Mono", 500), 11, DIM, "RACE FRIENDS"])
 
 
 ## A boxed key cap (JetBrains Mono 12, 1 px border) centred on `at.y`, starting at `at.x` or, with

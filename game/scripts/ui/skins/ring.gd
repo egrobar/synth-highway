@@ -43,6 +43,7 @@ func draw(s: RouteScreen, m: Dictionary) -> void:
 		_practice(s, m)
 	_drive(s, m)
 	_hints(s, m)
+	_battle(s, m)
 	if not str(m.get("message", "")).is_empty():
 		_message(s, str(m["message"]))
 	register_hits(s, m)
@@ -309,7 +310,7 @@ func _drive(s: RouteScreen, m: Dictionary) -> void:
 		for spread: float in [28.0, 18.0, 10.0, 4.0]:
 			box(s, DRIVE.grow(spread), Color(MINT, 0.05), Color.TRANSPARENT, 0.0, 40.0 + spread)
 	box(s, DRIVE, MINT if ready else Color(FROST, 0.08), Color.TRANSPARENT if ready else Color(FROST, 0.3), 0.0 if ready else 1.0, 40.0)
-	var label: String = "LOCKED" if m["locked"] else ("ENTER PRACTICE" if m["practice"]["on"] else "ENTER DRIVE")
+	var label: String = drive_label(m)
 	var f: Font = font("Outfit", 600, 8.0)
 	var label_w: float = text_width(label, f, 24)
 	var left: float = DRIVE.position.x + (DRIVE.size.x - label_w - (46.0 if ready else 0.0)) * 0.5
@@ -323,6 +324,14 @@ func _hints(s: RouteScreen, m: Dictionary) -> void:
 	if (m["song"] as Dictionary).get("imported", false):
 		line += "    X remove"
 	text(s, Rect2(40, 666, 1200, 18), line, font("Azeret Mono"), 11, SAGE)
+
+## Battle, at the right end of the hints row: a glass pill outlined in mint.
+func _battle(s: RouteScreen, m: Dictionary) -> void:
+	box(s, BATTLE, Color(BG, 0.8), Color.TRANSPARENT, 0.0, 21.0)
+	box(s, BATTLE, Color(MINT, 0.06), Color(MINT, 0.7), 1.0, 21.0)
+	battle_contents(s, BATTLE, m, [font("Azeret Mono"), 10, SAGE, Color.TRANSPARENT, Color(FROST, 0.35), 4.0],
+		[font("Outfit", 400), 16, MINT], [font("Azeret Mono"), 10, SAGE, "race friends"], true)
+
 
 
 func _message(s: RouteScreen, message: String) -> void:

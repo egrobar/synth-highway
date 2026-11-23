@@ -84,6 +84,7 @@ func _ready() -> void:
 	# anything this script defers (the first test run's host never heard of its own lobby).
 	_hook_wasd()
 	auto = OS.get_environment("WASD_MULTIPLAYER_TEST") != ""
+	_adopt_page_origin.call_deferred()
 
 
 func _process(delta: float) -> void:
@@ -162,6 +163,7 @@ func sign_in_online(again: String) -> Dictionary:
 func _on_wasd_page() -> bool:
 	if not bool(JavaScriptBridge.eval("window.parent !== window", true)):
 		return false
+	_adopt_page_origin()
 	if bool(_wasd().get("_parent_wasd")):
 		return true
 	var app_origin: String = str((_wasd().get("config") as Object).get("app_origin")) if _wasd().get("config") else ""
@@ -173,6 +175,41 @@ func _on_wasd_page() -> bool:
 	while not bool(_wasd().get("_parent_wasd")) and Time.get_ticks_msec() < deadline:
 		await get_tree().create_timer(0.1, true, false, true).timeout
 	return bool(_wasd().get("_parent_wasd"))
+
+
+## The page that frames the game, as an origin ("https://wasdengine.com"), or "" when it can't be told:
+## location.ancestorOrigins where the browser has it (Chrome, Safari), else the referrer's origin
+## (Firefox; WASD's page sets no referrer policy, so the game's referrer is the page's origin).
+const _PAGE_ORIGIN_JS := """(function () {
+	try { var a = location.ancestorOrigins; if (a && a.length) { return a[0]; } } catch (e) {}
+	try { return document.referrer ? new URL(document.referrer).origin : ''; } catch (e) { return ''; }
+})()"""
+
+
+## WASD serves its game pages on more than one hostname (wasdengine.com and app.wasdengine.com, the
+## same site and sign-in API), and the multiplayer add-on talks only to the one in
+## wasd_multiplayer.cfg, app.wasdengine.com. On a page at wasdengine.com the browser drops the
+## add-on's hello (posted for app.wasdengine.com only), the page never answers, and every online
+## Host or Join failed, signed in or not (No Refunds too; playtest of v8, 2026-11-23). So the game
+## points the add-on at the page it is actually on, when that page is a WASD one, and says hello
+## again. Only https wasdengine.com hostnames are trusted, as the add-on trusts only WASD's site; it
+## still checks every message's origin, which the browser sets and no page can fake.
+func _adopt_page_origin() -> void:
+	if not OS.has_feature("web") or _wasd() == null or _wasd().get("config") == null:
+		return
+	var origin: String = str(JavaScriptBridge.eval(_PAGE_ORIGIN_JS, true)).strip_edges().to_lower()
+	var config: Object = _wasd().get("config")
+	if not is_wasd_site(origin) or origin == str(config.get("app_origin")).to_lower():
+		return
+	print("Battle: this WASD page is %s; signing in through it rather than %s" % [origin, config.get("app_origin")])
+	config.set("app_origin", origin)
+	JavaScriptBridge.eval("try { window.parent.postMessage({type: 'wasd:play:hello', v: 1}, %s); } catch (e) {}"
+		% JSON.stringify(origin), true)
+
+
+## True for an https origin on wasdengine.com or one of its subdomains.
+static func is_wasd_site(origin: String) -> bool:
+	return RegEx.create_from_string("^https://([a-z0-9-]+\\.)*wasdengine\\.com$").search(origin.to_lower()) != null
 
 
 ## A failure from the add-on as a sentence for a player (PLAYER_MESSAGES); a failure it doesn't know

@@ -100,6 +100,10 @@ var _milestone_label: Label
 var _stage: Stage
 var _practice: bool = false
 var _speed: float = 1.0
+## A battle race (Battle, scripts/battle/): the others keep driving, so nothing pauses the song. Escape
+## (or Backspace) opens a menu over the run that only offers to leave, and tabbing away plays on.
+var _battle: bool = false
+var _battle_menu: MenuOverlay
 var _last_beat: int = -1000000
 var _next_milestone: int = 0
 ## Seconds early (negative) or late (positive) of every hit, for the results screen.
@@ -161,7 +165,15 @@ func begin(song: Chart, highway: Highway, world: ThemeWorld, sfx: Dictionary, op
 	if not _bot_name.is_empty():
 		_build_bot(_bot_name)
 	_world.set_target_speed(1.0)
-	clock.start(LEAD_IN)
+	# A battle names its lead-in: the time left until the race's song time 0 (Battle.race.zero), so
+	# every racer's song starts at the same moment however long this computer took to get here.
+	_battle = options.get("battle", false)
+	clock.start(float(options.get("lead_in", LEAD_IN)))
+
+
+## The run's HUD layer, for what a battle shows over the run (RivalBar).
+func hud() -> CanvasLayer:
+	return _hud
 
 
 ## Plays the whole song on the manual clock in one go. Used by the headless test.
@@ -222,13 +234,16 @@ func _input(event: InputEvent) -> void:
 
 func _notification(what: int) -> void:
 	# Tabbing away must never cost the player a run.
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and clock != null and not _paused and not _ended and _bot_name.is_empty():
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and clock != null and not _paused and not _ended and _bot_name.is_empty() \
+			and not _battle:
 		_pause()
 
 
 func _handle_control_key(code: Key) -> bool:
 	if _failed_at_usec >= 0:
 		return false
+	if _battle:
+		return _battle_key(code)
 	if _counting_in:
 		return code == KEY_ESCAPE or code == KEY_SPACE
 	if _paused and _pause_menu:
@@ -468,6 +483,31 @@ func _pause() -> void:
 	_pause_menu = MenuOverlay.new().setup("PAUSED", items, _start_count_in, Ui.ACCENT, HANDS_TEXT,
 		func() -> void: _play(_sfx, "ui"))
 	_hud.add_child(_pause_menu)
+
+
+## A battle's keys outside the instrument: Escape or Backspace opens the leave menu (the song plays on
+## under it, and the home keys still play: only the menu's own keys go to it), and closes it again.
+func _battle_key(code: Key) -> bool:
+	if _battle_menu:
+		if KeyMap.lane_for(code) >= 0 and code != KEY_Q:
+			return false
+		return _battle_menu.handle_key(KEY_ESCAPE if code == KEY_BACKSPACE else code)
+	if code != KEY_ESCAPE and code != KEY_BACKSPACE:
+		return false
+	var items: Array[Dictionary] = [
+		{"text": "Keep racing", "key_text": Ui.back_key(), "action": _close_battle_menu},
+		{"text": "Leave the battle", "key": KEY_Q, "key_text": "Q", "action": func() -> void: quit_to_menu.emit()},
+	]
+	_battle_menu = MenuOverlay.new().setup("STILL RACING", items, _close_battle_menu, Ui.ACCENT,
+		"The song plays on: the others are still driving.", func() -> void: _play(_sfx, "ui"))
+	_hud.add_child(_battle_menu)
+	return true
+
+
+func _close_battle_menu() -> void:
+	if _battle_menu:
+		_battle_menu.queue_free()
+		_battle_menu = null
 
 
 func _start_count_in() -> void:

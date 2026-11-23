@@ -42,3 +42,12 @@ environment/ssil/quality=2
 texture={
 "mipmaps/generate": true
 }
+
+[autoload]
+
+WasdMultiplayer="*res://addons/wasd_multiplayer/wasd_multiplayer.gd"
+Battle="*res://scripts/battle/battle.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/wasd_multiplayer/plugin.cfg")

@@ -20,6 +20,12 @@ extends Node
 ## two songs in an open region opens the next one clockwise. Until they clear a song, the
 ## player can still move their start.
 ##
+## Battles (B on the title; scripts/battle/): up to four players race the same song at the same
+## moment and the highest score wins. The battle screens (BattleScreen) host or join, show the lobby
+## and the standings; the route doubles as the song picker for the draw (_battle_pick), and a race
+## is an ordinary run with the battle options (no pause, a lead-in that ends on the race's start)
+## and the rivals along the top (RivalBar). Battle runs are never saved.
+##
 ## Options for automated checks, passed after "--" on the command line:
 ##   --bot=perfect|tapper|sloppy|afk  --song=<id>  --difficulty=easy|normal|hard
 ##       play a song with a bot through the real input path (add --fast for headless, no audio);
@@ -31,8 +37,13 @@ extends Node
 ##   --import-file=PATH [--import-title=...] [--region=<id>]   run an import without the file picker
 ##   --unlock-all           open every region
 ##   --save=NAME            keep progress in user://NAME instead of the player's save.json (tests)
+##   --battle-host | --battle-join=ADDRESS  [--battle-port=N] [--battle-name=NAME]
+##                          open the battle lobby on the LAN (desktop; two windows on one computer)
+##   --battle-auto[=PLAYERS] [--battle-song=<id>] [--battle-bot=perfect|tapper|sloppy]
+##                          suggest a song by itself, and as host draw once PLAYERS (2) are in;
+##                          a bot plays the race. A WASD multiplayer test run does this on its own.
 
-enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS, SETTINGS, MAP }
+enum Screen { TITLE, ROUTE, IMPORT, CALIBRATE, PLAYING, RESULTS, SETTINGS, MAP, BATTLE }
 
 ## P on the route steps through these: off, then practice at each speed.
 const PRACTICE_SPEEDS: Array[float] = [0.0, 1.0, 0.85, 0.7]
@@ -91,6 +102,32 @@ var _toast: Label
 ## The Escape menu on the title and route screens, while it is open.
 var _menu: MenuOverlay
 var _map: LoopMap
+# Battles (see the top, and scripts/battle/battle.gd).
+var _battle_screen: BattleScreen
+## Which box the connect screen has open: "", "code" (online) or "address" (LAN).
+var _battle_input: String = ""
+var _battle_message: String = ""
+var _battle_busy: bool = false
+## The route is picking a song for the battle's draw, not starting a drive.
+var _battle_pick: bool = false
+## This run is a battle race.
+var _battle_racing: bool = false
+var _rival_bar: RivalBar
+## Lanes this player hit or missed since the last report to Battle (the rivals' mini keyboards).
+var _battle_hit_lanes: int = 0
+var _battle_miss_lanes: int = 0
+## The draw's reveal is on screen; the race starts when it ends.
+var _battle_revealing: bool = false
+var _battle_auto_drawn: bool = false
+var _battle_auto_suggested: bool = false
+var _battle_roster_size: int = 0
+var _battle_roster_changed_at: int = 0
+var _battle_refresh_left: float = 0.0
+var _battle_shown_ping: int = -2
+## --battle-auto's host draws once this many are in and the roster has held still this long (a WASD
+## test run's clients all join within a couple of seconds of the host).
+const AUTO_PLAYERS := 2
+const AUTO_SETTLE_MSEC := 5000
 ## Where Escape on the loop map goes back to: the title or the route.
 var _map_back: Callable
 
@@ -138,6 +175,27 @@ func _ready() -> void:
 		return
 	if _options.has("song"):
 		_select_song_id(str(_options["song"]))
+	Battle.changed.connect(_on_battle_changed)
+	Battle.race_starting.connect(_on_race_starting)
+	Battle.standings_changed.connect(_on_battle_standings)
+	Battle.closed.connect(_on_battle_closed)
+	if _options.has("battle-auto"):
+		Battle.auto = true
+	if _options.has("battle-name"):
+		Battle.my_name = str(_options["battle-name"])
+	# A WASD multiplayer test run hosts or joins on its own: wait for its lobby on the battle screen.
+	if Battle.auto and OS.get_environment("WASD_MULTIPLAYER_TEST") != "":
+		_show_battle()
+		return
+	if _options.has("battle-host") or _options.has("battle-join"):
+		_show_battle()
+		var port: int = int(_options.get("battle-port", Battle.PORT))
+		var err: Error = Battle.host_lan(port) if _options.has("battle-host") else \
+			Battle.join_lan(str(_options["battle-join"]), port)
+		if err != OK:
+			_battle_message = "Couldn't open the battle on port %d (error %d)." % [port, err]
+		_show_battle()
+		return
 	match str(_options.get("screen", "title")):
 		"route":
 			_show_route()
@@ -200,7 +258,23 @@ func _play_ambience(theme: String) -> void:
 	_ambient.play()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if _battle_racing and _session and _session.judge:
+		_report_race(delta)
+	elif _screen == Screen.BATTLE and Battle.phase == Battle.Phase.RACING:
+		# After your run, the others' live scores keep the standings moving.
+		_battle_refresh_left -= delta
+		if _battle_refresh_left <= 0.0:
+			_battle_refresh_left = 0.5
+			_present_battle()
+	elif _screen == Screen.BATTLE and Battle.phase == Battle.Phase.LOBBY and Battle.ping_ms() != _battle_shown_ping:
+		# The lobby's ping settles as replies come in (the first ones wait on the world loading).
+		_battle_refresh_left -= delta
+		if _battle_refresh_left <= 0.0:
+			_battle_refresh_left = 1.0
+			_battle_shown_ping = Battle.ping_ms()
+			_present_battle()
+	_battle_auto_tick()
 	if _screen == Screen.CALIBRATE:
 		_tick_calibration()
 	elif _screen == Screen.PLAYING and _options.has("shots"):
@@ -243,10 +317,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif code == KEY_S:
 				_click()
 				_open_settings(_show_title)
+			elif code == KEY_B:
+				_click()
+				_show_battle()
 			elif code == KEY_ESCAPE:
 				_open_menu()
+		Screen.BATTLE:
+			_battle_key(code)
 		Screen.ROUTE:
-			_route_key(code)
+			if _battle_pick:
+				_battle_pick_key(code)
+			else:
+				_route_key(code)
 		Screen.MAP:
 			_map_key(code)
 		Screen.SETTINGS:
@@ -287,6 +369,8 @@ func _clear_ui() -> void:
 	_menu = null
 	_map = null
 	_toast = null
+	_battle_screen = null
+	_rival_bar = null
 
 
 func _end_session() -> void:
@@ -399,7 +483,7 @@ func _show_title() -> void:
 	Ui.anchor(line, 0.0, 0.0, 1.0, 0.0, 0, 300, 0, 348, HORIZONTAL_ALIGNMENT_CENTER)
 	_ui.add_child(line)
 	_ui.add_child(_home_row_guide(400.0))
-	_hint("SPACE  start        S  settings        ESC  menu")
+	_hint("SPACE  start        B  battle        S  settings        ESC  menu")
 
 
 ## The ten keys, as they sit under your hands: fingers rest on A S D F and J K L ;,
@@ -476,6 +560,8 @@ func _show_route(message: String = "") -> void:
 	_screen = Screen.ROUTE
 	var region: Dictionary = _regions[_region_index]
 	_songs = SongLibrary.in_region(region["id"])
+	if _battle_pick and message.is_empty():
+		message = "Pick a song for the battle's draw: ENTER puts it in.  %s goes back to the lobby." % Ui.back_key()
 	# The song select is a full-screen illustrated skin (RouteScreen; the Song Select Redesigns
 	# canvas), so the 3D world is neither built nor drawn behind it: switching regions here
 	# no longer rebuilds a whole world. The region's ambience still plays.
@@ -733,6 +819,22 @@ func _difficulty_cards(song: Dictionary) -> Array:
 
 
 func _on_route_action(action: String, arg: Variant) -> void:
+	# Picking for a battle: driving a song puts it in the draw; the host chooses the level, and
+	# practice and loading songs belong to the drive.
+	if _battle_pick:
+		match action:
+			"drive":
+				_battle_suggest_selected()
+				return
+			"song":
+				if int(arg) == _selected_index():
+					_battle_suggest_selected()
+					return
+			"difficulty":
+				_show_toast("The host picks the level everyone races.")
+				return
+			"practice", "load":
+				return
 	match action:
 		"region":
 			if int(arg) != _region_index:
@@ -1018,31 +1120,54 @@ func _show_import_message(text: String) -> void:
 
 # ---------------------------------------------------------------- the drive
 
-func _start_run(song: Dictionary) -> void:
+## `battle` is a race's {"level", "zero"} (Battle.race, song time 0 on this computer's clock), or {}.
+func _start_run(song: Dictionary, battle: Dictionary = {}) -> void:
 	assert(not song.is_empty(), "Unknown song")
 	_current_song = song
 	_song_choice[song["theme"]] = song["id"]
 	_end_session()
 	_clear_ui()
 	_screen = Screen.PLAYING
-	var chart := Chart.load_file(song["path"], _level_for(song))
+	_battle_racing = not battle.is_empty()
+	var chart := Chart.load_file(song["path"], str(battle["level"]) if _battle_racing else _level_for(song))
 	var highway: Highway = _stage.show_chart(chart.theme, chart)
 	_play_ambience(chart.theme)
 	_ambient.volume_db = -18.0
 	_session = PlaySession.new()
 	add_child(_session)
 	_session.finished.connect(_on_run_finished)
-	_session.quit_to_menu.connect(_show_route)
+	_session.quit_to_menu.connect(func() -> void:
+		if _battle_racing:
+			_leave_battle("You left the battle.")
+		else:
+			_show_route())
 	_session.restart_requested.connect(func() -> void: _start_run(_current_song))
 	var options := {"offset": _save.calibration, "stage": _stage}
-	if _practice_step > 0 and not _options.has("bot"):
+	if _practice_step > 0 and not _options.has("bot") and not _battle_racing:
 		options["practice"] = true
 		options["speed"] = PRACTICE_SPEEDS[_practice_step]
 	if _options.has("bot"):
 		options["bot"] = str(_options["bot"])
 	if _options.has("fast"):
 		options["manual"] = true
+	if _battle_racing:
+		options["battle"] = true
+		# However long the draw and the world took here, the song starts at the race's moment.
+		options["lead_in"] = maxf(float(int(battle["zero"]) - Time.get_ticks_usec()) / 1000000.0, 0.5)
+		if _options.has("battle-bot") or Battle.auto:
+			options["bot"] = str(_options.get("battle-bot", "sloppy"))
 	_session.begin(chart, highway, _stage.world, _sfx, options)
+	if _battle_racing:
+		# The rivals' mini keyboards light the lanes each racer hits and misses (RivalBar).
+		_battle_hit_lanes = 0
+		_battle_miss_lanes = 0
+		_session.judge.note_hit.connect(func(n: Chart.Note, _verdict: String, _offset: float) -> void:
+			_battle_hit_lanes |= 1 << n.lane)
+		_session.judge.note_missed.connect(func(n: Chart.Note) -> void: _battle_miss_lanes |= 1 << n.lane)
+		_rival_bar = RivalBar.new()
+		# Under the run's own HUD layer, below the leave menu the run opens over it.
+		_session.hud().add_child(_rival_bar)
+		_session.hud().move_child(_rival_bar, 0)
 
 
 ## The next song in this region, or the first of the next region once it is open.
@@ -1066,6 +1191,16 @@ func _drive_next() -> void:
 
 func _on_run_finished(result: Dictionary) -> void:
 	if _options.has("fast"):
+		return
+	if _battle_racing:
+		# A battle run is never saved: its numbers go to the others, and the standings take over.
+		_report_race(0.0)
+		_battle_racing = false
+		Battle.finish(result)
+		_stage.world.set_target_speed(0.0 if result["failed"] else 0.6)
+		_ambient.volume_db = -9.0
+		print("BATTLE_RESULT ", JSON.stringify({"me": Battle.me(), "score": result["score"], "failed": result["failed"]}))
+		_show_battle()
 		return
 	var open_before: Array[bool] = _open_regions()
 	var new_best: bool = false
@@ -1190,6 +1325,326 @@ func _show_results(result: Dictionary, new_best: bool, opened_region: String) ->
 		_hint("SPACE  try again        P  practise it (no fail, slower)        ESC  route")
 	else:
 		_hint("ENTER  next song        SPACE  drive again        ESC  route")
+
+
+# ---------------------------------------------------------------- battles
+
+## The battle screens (BattleScreen) for wherever the battle is: connecting, the lobby, or the
+## standings after a race. The region's world rolls on behind, as on the title.
+func _show_battle() -> void:
+	_end_session()
+	_battle_pick = false
+	_battle_racing = false
+	_clear_ui()
+	_screen = Screen.BATTLE
+	_show_world(_regions[_region_index]["id"])
+	_ambient.volume_db = -9.0
+	_battle_screen = BattleScreen.new()
+	_battle_screen.acted.connect(_on_battle_action)
+	_ui.add_child(_battle_screen)
+	_present_battle()
+
+
+func _present_battle() -> void:
+	# The draw's reveal covers the screen until the race starts; nothing under it needs redrawing.
+	if _battle_screen == null or _battle_revealing:
+		return
+	match Battle.phase:
+		Battle.Phase.NONE:
+			_battle_screen.present({"kind": "connect", "online": Battle.online_available(), "lan": Battle.lan_available(),
+				"input": _battle_input, "busy": _battle_busy, "message": _battle_message})
+		Battle.Phase.LOBBY:
+			_battle_screen.present(_battle_lobby_model())
+		_:
+			# The race has started but this player hasn't driven it yet (the draw's reveal is about to
+			# cover the screen): no standings of a race nobody has started.
+			if Battle.phase == Battle.Phase.RACING and not Battle.results.has(Battle.me()):
+				_battle_screen.present({"kind": "blank"})
+			else:
+				_battle_screen.present(_battle_standings_model())
+
+
+func _battle_lobby_model() -> Dictionary:
+	var slots: Array = []
+	var ids: Array = Battle.roster.keys()
+	ids.sort()
+	for id: int in ids:
+		var entry: Dictionary = Battle.roster[id]
+		var song: Dictionary = SongLibrary.find(str(entry.get("suggestion", ""))) if str(entry.get("suggestion", "")) != "" else {}
+		slots.append({"empty": false, "name": str(entry["name"]), "host": id == 1, "me": id == Battle.me(),
+			"suggestion": "" if song.is_empty() else str(song["title"])})
+	var picks: int = Battle.suggestions().size()
+	var note: String = "%d song%s in the draw. ENTER draws one and the race starts." % [picks, "" if picks == 1 else "s"]
+	if Battle.roster.size() < 2:
+		note = "Waiting for at least one more driver to join."
+	elif picks == 0:
+		note = "Waiting for a song pick: S to pick yours."
+	return {"kind": "lobby", "code": Battle.lobby_code, "transport": Battle.transport, "slots": slots,
+		"difficulty": Battle.difficulty, "is_host": Battle.is_host(), "can_draw": Battle.can_draw(), "draw_note": note,
+		"ping": Battle.ping_ms(), "message": _battle_message}
+
+
+func _battle_standings_model() -> Dictionary:
+	var final: bool = Battle.race_over()
+	var standings: Array = Battle.standings()
+	var rows: Array = []
+	for i: int in standings.size():
+		var row: Dictionary = standings[i]
+		var result: Dictionary = row["result"]
+		var state: int = int(row["state"])
+		var detail: String = "still driving  ·  %d%% of the song" % int(float(Battle.live.get(row["peer"], {}).get("progress", 0.0)) * 100.0)
+		if state == Battle.STATE_LEFT:
+			detail = "left the battle"
+		elif not result.is_empty() and bool(result.get("failed", false)):
+			detail = "out of gas at %d%% of the song" % int(round(float(result.get("progress", 0.0)) * 100.0))
+		elif not result.is_empty():
+			detail = "grade %s  ·  accuracy %d%%  ·  max combo %d" % [str(result.get("grade", "")),
+				int(round(float(result.get("accuracy", 0.0)) * 100.0)), int(result.get("max_combo", 0))]
+		rows.append({"place": RivalBar.ORDINALS[mini(i, 3)], "name": str(row["name"]), "score": int(row["score"]),
+			"detail": detail, "me": bool(row["me"]), "dim": state == Battle.STATE_LEFT or (not final and result.is_empty())})
+	var headline: String = "WAITING FOR THE OTHERS"
+	if final and not standings.is_empty():
+		headline = "YOU WIN" if bool(standings[0]["me"]) else "%s WINS" % str(standings[0]["name"]).to_upper()
+	return {"kind": "standings", "final": final, "headline": headline, "rows": rows, "is_host": Battle.is_host()}
+
+
+func _battle_key(code: Key) -> void:
+	match Battle.phase:
+		Battle.Phase.NONE:
+			if _battle_busy:
+				return
+			var can: bool = Battle.online_available() or Battle.lan_available()
+			if code == KEY_H and can:
+				_click()
+				_battle_host()
+			elif code == KEY_J and can:
+				_click()
+				_battle_input = "code" if Battle.online_available() else "address"
+				_battle_message = ""
+				_present_battle()
+			elif code == KEY_ESCAPE:
+				_click()
+				_battle_message = ""
+				_battle_input = ""
+				_show_title()
+		Battle.Phase.LOBBY:
+			match code:
+				KEY_S:
+					_click()
+					_battle_pick = true
+					_show_route()
+				KEY_TAB:
+					if Battle.is_host():
+						_click()
+						var at: int = BattleScreen.LEVELS.find(Battle.difficulty)
+						Battle.set_difficulty(BattleScreen.LEVELS[wrapi(at + 1, 0, BattleScreen.LEVELS.size())])
+				KEY_ENTER, KEY_KP_ENTER:
+					if Battle.can_draw():
+						_click()
+						Battle.draw()
+				KEY_ESCAPE:
+					_click()
+					_leave_battle("You left the battle.")
+		_:
+			if (code == KEY_ENTER or code == KEY_KP_ENTER) and Battle.is_host() and Battle.race_over():
+				_click()
+				Battle.back_to_lobby()
+			elif code == KEY_ESCAPE:
+				_click()
+				_leave_battle("You left the battle.")
+
+
+func _on_battle_action(action: String, arg: Variant) -> void:
+	match action:
+		"host":
+			if not _battle_busy:
+				_battle_host()
+		"join":
+			_battle_input = "code" if Battle.online_available() else "address"
+			_present_battle()
+		"submit":
+			_battle_join(str(arg))
+		"cancel_input":
+			_battle_input = ""
+			_present_battle()
+		"difficulty":
+			Battle.set_difficulty(str(arg))
+		"suggest":
+			_battle_pick = true
+			_show_route()
+		"draw":
+			Battle.draw()
+
+
+func _battle_host() -> void:
+	_battle_message = ""
+	if Battle.online_available():
+		_battle_busy = true
+		_battle_message = "Signing in with WASD Engine and opening a lobby..."
+		_present_battle()
+		var result: Dictionary = await Battle.host_online()
+		_battle_busy = false
+		_battle_message = "" if result.get("ok", false) else str(result.get("message", "Couldn't open a lobby."))
+	elif Battle.lan_available():
+		var err: Error = Battle.host_lan(int(_options.get("battle-port", Battle.PORT)))
+		if err != OK:
+			_battle_message = "Couldn't open a battle on this network (error %d). Is one already open on this computer?" % err
+	if _screen == Screen.BATTLE:
+		_present_battle()
+
+
+func _battle_join(text: String) -> void:
+	text = text.strip_edges()
+	if Battle.online_available():
+		if text.length() != 6:
+			_battle_message = "A lobby code has six letters."
+			_present_battle()
+			return
+		_battle_busy = true
+		_battle_message = "Joining %s..." % text.to_upper()
+		_present_battle()
+		var result: Dictionary = await Battle.join_online(text)
+		_battle_busy = false
+		_battle_message = "" if result.get("ok", false) else str(result.get("message", "Couldn't join that lobby."))
+		if result.get("ok", false):
+			_battle_input = ""
+	else:
+		var err: Error = Battle.join_lan(text if not text.is_empty() else "127.0.0.1", int(_options.get("battle-port", Battle.PORT)))
+		_battle_message = "Connecting to %s..." % text if err == OK else "Couldn't reach that address (error %d)." % err
+		if err == OK:
+			_battle_input = ""
+	if _screen == Screen.BATTLE:
+		_present_battle()
+
+
+## The route as the battle's song picker (_battle_pick): the drive keys put the song in the draw.
+func _battle_pick_key(code: Key) -> void:
+	match code:
+		KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
+			_battle_suggest_selected()
+		KEY_ESCAPE:
+			_click()
+			_show_battle()
+		KEY_P, KEY_L, KEY_X, KEY_S, KEY_M, KEY_TAB:
+			pass
+		_:
+			_route_key(code)
+
+
+func _battle_suggest_selected() -> void:
+	if _songs.is_empty():
+		return
+	var song: Dictionary = _songs[_selected_index()]
+	if not _region_unlocked(_region_index):
+		_show_toast(_locked_text(_region_index))
+		return
+	if song["source"] == "imported":
+		_show_toast("Your own songs are only on your computer: pick one of the built-in songs.")
+		return
+	_click()
+	Battle.suggest(str(song["id"]))
+	_battle_message = "You put %s in the draw." % str(song["title"])
+	_show_battle()
+
+
+func _on_battle_changed() -> void:
+	if _screen == Screen.BATTLE:
+		_present_battle()
+	if Battle.roster.size() != _battle_roster_size:
+		_battle_roster_size = Battle.roster.size()
+		_battle_roster_changed_at = Time.get_ticks_msec()
+
+
+## The draw is in: the reveal plays out, then the race starts at the moment every racer shares.
+func _on_race_starting(song_id: String, level: String, pool: Array, zero_usec: int) -> void:
+	var song: Dictionary = SongLibrary.find(song_id)
+	if song.is_empty():
+		push_error("Battle: no song %s here" % song_id)
+		return
+	print("BATTLE_EVENT ", JSON.stringify({"event": "draw", "song": song_id, "level": level, "pool": pool}))
+	if _screen != Screen.BATTLE:
+		_show_battle()
+	_battle_message = ""
+	var titles: Array = pool.map(func(id: Variant) -> String: return str(SongLibrary.find(str(id)).get("title", id)))
+	var region_at: int = _region_ids().find(song["theme"])
+	var region_name: String = str(_regions[region_at]["name"]) if region_at >= 0 else ""
+	var reveal_seconds: float = maxf(float(zero_usec - Time.get_ticks_usec()) / 1000000.0 - Battle.LEAD_SECONDS, 0.0)
+	_battle_revealing = true
+	_battle_screen.play_reveal(titles, pool.find(song_id), str(song["title"]),
+		"%s  ·  %s" % [level.to_upper(), region_name.to_upper()], reveal_seconds)
+	await get_tree().create_timer(reveal_seconds).timeout
+	_battle_revealing = false
+	if Battle.phase != Battle.Phase.RACING:
+		return  # the battle closed during the reveal
+	_start_run(song, {"level": level, "zero": zero_usec})
+
+
+func _on_battle_standings() -> void:
+	if _screen == Screen.BATTLE:
+		_present_battle()
+	if Battle.race_over():
+		var final: Array = Battle.standings().map(func(r: Dictionary) -> Array: return [r["name"], r["score"]])
+		print("BATTLE_EVENT ", JSON.stringify({"event": "standings", "rows": final}))
+
+
+func _on_battle_closed(reason: String) -> void:
+	_battle_racing = false
+	_battle_pick = false
+	_battle_busy = false
+	_battle_input = ""
+	_battle_revealing = false
+	_battle_message = reason
+	if _screen == Screen.BATTLE or _screen == Screen.PLAYING or _screen == Screen.ROUTE:
+		_show_battle()
+
+
+func _leave_battle(message: String) -> void:
+	_battle_racing = false
+	Battle.leave()
+	_battle_message = ""
+	_show_title()
+	_show_toast(message)
+
+
+## Every frame of a race: this run's numbers to the others, and the rivals' panels.
+func _report_race(delta: float) -> void:
+	var judge: Judge = _session.judge
+	var progress: float = clampf(_session.clock.now() / maxf(_session.chart.last_note_end(), 0.001), 0.0, 1.0)
+	Battle.report(judge.score(), judge.combo, judge.fuel, judge.hits, judge.misses, progress, _battle_hit_lanes,
+		_battle_miss_lanes, judge.fuel <= 0.0, delta)
+	_battle_hit_lanes = 0
+	_battle_miss_lanes = 0
+	if _rival_bar:
+		_rival_bar.refresh(delta)
+
+
+## --battle-auto and WASD test runs: suggest a song as soon as you're in the lobby, and as host,
+## draw once everyone's in (AUTO_PLAYERS, or --battle-auto=N) and the roster has held still a while.
+func _battle_auto_tick() -> void:
+	if not Battle.auto or Battle.phase != Battle.Phase.LOBBY:
+		return
+	var mine: Dictionary = Battle.roster.get(Battle.me(), {})
+	if not mine.is_empty() and str(mine.get("suggestion", "")).is_empty() and not _battle_auto_suggested:
+		_battle_auto_suggested = true
+		Battle.suggest(_battle_auto_song())
+	var need: int = int(_options["battle-auto"]) if _options.get("battle-auto") is String else AUTO_PLAYERS
+	if Battle.is_host() and not _battle_auto_drawn and Battle.can_draw() and Battle.roster.size() >= need \
+			and Battle.suggestions().size() >= Battle.roster.size() \
+			and Time.get_ticks_msec() - _battle_roster_changed_at > AUTO_SETTLE_MSEC:
+		_battle_auto_drawn = true
+		Battle.draw()
+
+
+## The shortest built-in song, so an automatic race fits in a test run (or --battle-song).
+func _battle_auto_song() -> String:
+	if _options.has("battle-song"):
+		return str(_options["battle-song"])
+	var best: Dictionary = {}
+	for region: Dictionary in _regions:
+		for song: Dictionary in SongLibrary.in_region(region["id"]):
+			if song["source"] != "imported" and (best.is_empty() or float(song["duration"]) < float(best["duration"])):
+				best = song
+	return str(best.get("id", "county_line"))
 
 
 # ---------------------------------------------------------------- settings

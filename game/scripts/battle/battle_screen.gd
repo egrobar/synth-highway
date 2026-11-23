@@ -14,7 +14,8 @@ extends Control
 ## main.gd owns the keys and the network and calls present(model) whenever something changes; this
 ## only draws, and says what was clicked through `acted`. The models:
 ##   connect   {"kind", "online": bool, "lan": bool, "input": ""|"code"|"address", "busy": bool, "message"}
-##   lobby     {"kind", "code", "transport", "slots": [{"empty", "name", "host", "me", "suggestion"}],
+##   lobby     {"kind", "code" (Copy / C puts it on the clipboard: copy_code), "transport",
+##              "slots": [{"empty", "name", "host", "me", "suggestion"}],
 ##              "difficulty", "is_host", "can_draw", "draw_note", "ping": int, "message"}
 ##   standings {"kind", "final": bool, "headline", "rows": [{"place", "name", "score", "detail", "me",
 ##              "dim"}], "is_host"}
@@ -27,6 +28,11 @@ const LEVELS: Array[String] = ["easy", "normal", "hard"]
 var _content: Control
 var _input: LineEdit
 var _reveal: Control
+## The lobby's code (or address) as shown, for Copy; its button's label, and until when it reads
+## "Copied" (the lobby redraws on every ping change, so the state outlives one drawing).
+var _code: String = ""
+var _copy_label: Label
+var _copied_until: int = 0
 
 
 func _ready() -> void:
@@ -125,6 +131,8 @@ func _draw_lobby(model: Dictionary) -> void:
 	var lan: bool = str(model.get("transport", "")) == "lan"
 	var code_box := Ui.card(true)
 	Ui.anchor(code_box, 0.5, 0.0, 0.5, 0.0, -300, 124, 300, 214)
+	_code = str(model.get("code", ""))
+	_copy_button(Vector2(318, 144))
 	code_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_content.add_child(code_box)
 	var code_caption := Ui.caption("ADDRESS" if lan else "LOBBY CODE", 18, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
@@ -221,8 +229,8 @@ func _draw_lobby(model: Dictionary) -> void:
 		var ping_label := Ui.caption("ping %d ms" % ping, 18, Ui.MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
 		Ui.anchor(ping_label, 1.0, 0.0, 1.0, 0.0, -260, 24, -30, 48, HORIZONTAL_ALIGNMENT_RIGHT)
 		_content.add_child(ping_label)
-	_hint(("S  pick your song        TAB  difficulty        ENTER  draw        ESC  leave") if is_host
-		else "S  pick your song        ESC  leave")
+	_hint(("S  pick your song        TAB  difficulty        ENTER  draw        C  copy code        ESC  leave") if is_host
+		else "S  pick your song        C  copy code        ESC  leave")
 
 
 # ---------------------------------------------------------------- standings
@@ -352,6 +360,41 @@ func _steps(top: float) -> void:
 			var arrow := Ui.caption("›", 34, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 			Ui.anchor(arrow, 0.5, 0.0, 0.5, 0.0, x + step_w, top + 4, x + step_w + gap, top + 50, HORIZONTAL_ALIGNMENT_CENTER)
 			_content.add_child(arrow)
+
+
+## Copies the lobby's code (or the host's address) to the clipboard, for pasting into a message to
+## friends: the Copy button beside it, or C (main.gd). The button reads "Copied" for a moment.
+func copy_code() -> void:
+	if _code.is_empty():
+		return
+	DisplayServer.clipboard_set(_code)
+	_copied_until = Time.get_ticks_msec() + 1600
+	if is_instance_valid(_copy_label):
+		_copy_label.text = "Copied"
+	get_tree().create_timer(1.65).timeout.connect(func() -> void:
+		if is_instance_valid(_copy_label) and Time.get_ticks_msec() >= _copied_until:
+			_copy_label.text = "Copy")
+
+
+## The Copy button right of the code card, its top-left at `at` from the screen's top centre.
+func _copy_button(at: Vector2) -> void:
+	var button := Ui.card(false)
+	Ui.anchor(button, 0.5, 0.0, 0.5, 0.0, at.x, at.y, at.x + 150, at.y + 50)
+	button.mouse_filter = Control.MOUSE_FILTER_STOP
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	button.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.pressed and (e as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			copy_code()
+			acted.emit("copied", null))
+	_content.add_child(button)
+	var key := Ui.caption("C", 18, Ui.MUTED)
+	key.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	Ui.anchor(key, 0.0, 0.0, 0.0, 1.0, 16, 0, 40, 0)
+	button.add_child(key)
+	_copy_label = Ui.label("Copied" if Time.get_ticks_msec() < _copied_until else "Copy", 24, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
+	_copy_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	Ui.anchor(_copy_label, 0.0, 0.0, 1.0, 1.0, 40, 0, -18, 0, HORIZONTAL_ALIGNMENT_RIGHT)
+	button.add_child(_copy_label)
 
 
 ## Back (or Leave) in the top-left corner, for the mouse: it does what Escape does.

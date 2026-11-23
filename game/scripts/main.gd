@@ -1560,6 +1560,10 @@ func _battle_key(code: Key) -> void:
 				_battle_exit()
 		Battle.Phase.LOBBY:
 			match code:
+				KEY_C:
+					# The code (or address) to the clipboard, to paste to friends.
+					_click()
+					_battle_screen.copy_code()
 				KEY_S:
 					_click()
 					_battle_pick = true
@@ -1605,6 +1609,8 @@ func _on_battle_action(action: String, arg: Variant) -> void:
 			_show_route()
 		"draw":
 			Battle.draw()
+		"copied":
+			_click()
 		"back":
 			# The Back / Leave button does what Escape does on that screen.
 			_battle_key(KEY_ESCAPE)

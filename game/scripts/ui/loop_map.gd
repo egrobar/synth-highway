@@ -47,6 +47,10 @@ const PANEL := Color("#080A1BD9")
 var model: Dictionary = {}
 var _hits: Array = []
 var _scale: float = 1.0
+## The design-space scale and the transform drawing goes through, for RouteSkin.draw_text, which
+## draws text at its on-screen size so it stays sharp (as on the song select).
+var draw_scale: float = 1.0
+var draw_matrix := Transform2D.IDENTITY
 var _origin := Vector2.ZERO
 ## Stars as (x, y, twinkle phase).
 var _stars: Array[Vector3] = []
@@ -104,7 +108,9 @@ func _draw() -> void:
 	_scale = minf(size.x / DESIGN.x, size.y / DESIGN.y)
 	_origin = (size - DESIGN * _scale) * 0.5
 	draw_rect(Rect2(Vector2.ZERO, size), Color("#05060C"))
-	draw_set_transform(_origin, 0.0, Vector2(_scale, _scale))
+	draw_scale = _scale
+	draw_matrix = Transform2D(0.0, Vector2(_scale, _scale), 0.0, _origin)
+	draw_set_transform_matrix(draw_matrix)
 	_hits.clear()
 	var t: float = Time.get_ticks_msec() / 1000.0 if Settings.motion else 0.0
 	_draw_sky(regions, t)
@@ -117,6 +123,8 @@ func _draw() -> void:
 	_draw_centre(regions)
 	_draw_header()
 	_draw_footer()
+	draw_scale = 1.0
+	draw_matrix = Transform2D.IDENTITY
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
@@ -356,7 +364,7 @@ func _draw_centre(regions: Array) -> void:
 	RouteSkin.text(self, Rect2(panel.position.x + 16, 354, panel.size.x - 32, 22), str(region.get("genres", "")), body, 17,
 		INK, HORIZONTAL_ALIGNMENT_CENTER)
 	var blurb_font: Font = RouteSkin.font("Space Grotesk", 400)
-	draw_multiline_string(blurb_font, Vector2(panel.position.x + 36, 396), str(region.get("blurb", "")),
+	RouteSkin.draw_multiline_text(self, blurb_font, Vector2(panel.position.x + 36, 396), str(region.get("blurb", "")),
 		HORIZONTAL_ALIGNMENT_CENTER, panel.size.x - 72, 14, 2, MUTED)
 	RouteSkin.text(self, Rect2(panel.position.x, 428, panel.size.x, 16),
 		"%d SONGS  ·  %d CLEARED" % [int(region.get("total", 0)), int(region.get("cleared", 0))],

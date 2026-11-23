@@ -301,9 +301,9 @@ func _lit(s: RouteScreen, rect: Rect2, value: String, f: Font, size: int, color:
 	var ascent: float = f.get_ascent(size)
 	var height: float = ascent + f.get_descent(size)
 	var at := Vector2(rect.position.x, rect.position.y + (rect.size.y - height) * 0.5 + ascent)
-	s.draw_string_outline(f, at, shown, align, rect.size.x, size, 10, Color(color, 0.07))
-	s.draw_string_outline(f, at, shown, align, rect.size.x, size, 4, Color(color, 0.14))
-	s.draw_string(f, at, shown, align, rect.size.x, size, color)
+	draw_text(s, f, at, shown, align, rect.size.x, size, Color(color, 0.07), 10)
+	draw_text(s, f, at, shown, align, rect.size.x, size, Color(color, 0.14), 4)
+	draw_text(s, f, at, shown, align, rect.size.x, size, color)
 
 
 ## A mode button: the chosen one pressed in (sulphur, shadowed at the top), the other raised

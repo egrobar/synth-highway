@@ -171,17 +171,67 @@ static func text(c: CanvasItem, rect: Rect2, value: String, f: Font, size: int, 
 	var ascent: float = f.get_ascent(size)
 	var height: float = ascent + f.get_descent(size)
 	var baseline: float = rect.position.y + (rect.size.y - height) * valign + ascent
-	c.draw_string(f, Vector2(rect.position.x, baseline), shown, align, rect.size.x, size, color)
+	draw_text(c, f, Vector2(rect.position.x, baseline), shown, align, rect.size.x, size, color)
 
 
 ## Text from a baseline point, unbounded.
 static func text_at(c: CanvasItem, baseline_left: Vector2, value: String, f: Font, size: int, color: Color) -> void:
-	c.draw_string(f, baseline_left, value, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
+	draw_text(c, f, baseline_left, value, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
 
 
 ## Outlined text (CSS -webkit-text-stroke over a transparent fill).
 static func text_outline(c: CanvasItem, baseline_left: Vector2, value: String, f: Font, size: int, color: Color, width: int) -> void:
-	c.draw_string_outline(f, baseline_left, value, HORIZONTAL_ALIGNMENT_LEFT, -1, size, width, color)
+	draw_text(c, f, baseline_left, value, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color, width)
+
+
+## Draws a string on `c`. The song select and the loop map draw their 1280x720 design through a
+## scale (RouteScreen and LoopMap expose it as `draw_scale` and the transform in use as
+## `draw_matrix`): text drawn straight through it was rasterised at its design size and then
+## stretched, 1.25x at the game's base size and more on bigger screens, and looked blurry next to
+## the crisp menus (playtest, 2026-11-23). So the glyphs are drawn at their on-screen size under
+## the inverse scale, which lands them in exactly the same place. `outline` >= 0 draws an outline
+## of that width (design pixels) instead of the fill.
+static func draw_text(c: CanvasItem, f: Font, at: Vector2, value: String, align: HorizontalAlignment, width: float,
+		size: int, color: Color, outline: int = -1) -> void:
+	var scale_value: Variant = c.get("draw_scale")
+	var k: float = float(scale_value) if scale_value != null else 1.0
+	if is_equal_approx(k, 1.0) or k <= 0.0:
+		if outline >= 0:
+			c.draw_string_outline(f, at, value, align, width, size, outline, color)
+		else:
+			c.draw_string(f, at, value, align, width, size, color)
+		return
+	var matrix: Transform2D = c.get("draw_matrix")
+	c.draw_set_transform_matrix(matrix * Transform2D(0.0, Vector2(1.0 / k, 1.0 / k), 0.0, Vector2.ZERO))
+	# Rounded down, so text never comes out wider than the design measured it (fit() trims to that).
+	var big: int = maxi(1, floori(size * k))
+	# A pixel of slack: hinting at the bigger size can add one, and draw_string drops what overflows.
+	var span: float = width * k + 1.0 if width > 0.0 else -1.0
+	# Tracking to the nearest pixel keeps the design's look; where that would overflow a label
+	# fitted to its exact width ("ENTER DRIV"), it rounds down instead.
+	var face: Font = Fonts.spaced_for_scale(f, k)
+	if span > 0.0 and face.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, big).x > span:
+		face = Fonts.spaced_for_scale(f, k, true)
+	if outline >= 0:
+		c.draw_string_outline(face, at * k, value, align, span, big, maxi(1, int(round(outline * k))), color)
+	else:
+		c.draw_string(face, at * k, value, align, span, big, color)
+	c.draw_set_transform_matrix(matrix)
+
+
+## draw_multiline_string, sharp the same way as draw_text.
+static func draw_multiline_text(c: CanvasItem, f: Font, at: Vector2, value: String, align: HorizontalAlignment,
+		width: float, size: int, max_lines: int, color: Color) -> void:
+	var scale_value: Variant = c.get("draw_scale")
+	var k: float = float(scale_value) if scale_value != null else 1.0
+	if is_equal_approx(k, 1.0) or k <= 0.0:
+		c.draw_multiline_string(f, at, value, align, width, size, max_lines, color)
+		return
+	var matrix: Transform2D = c.get("draw_matrix")
+	c.draw_set_transform_matrix(matrix * Transform2D(0.0, Vector2(1.0 / k, 1.0 / k), 0.0, Vector2.ZERO))
+	c.draw_multiline_string(Fonts.spaced_for_scale(f, k), at * k, value, align, width * k + 1.0, maxi(1, floori(size * k)),
+		max_lines, color)
+	c.draw_set_transform_matrix(matrix)
 
 
 # ---------------------------------------------------------------- shapes

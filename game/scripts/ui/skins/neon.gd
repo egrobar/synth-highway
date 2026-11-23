@@ -531,8 +531,8 @@ static func _halo_text(c: CanvasItem, rect: Rect2, value: String, f: Font, size:
 		align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT) -> void:
 	var shown: String = fit(value, f, size, rect.size.x)
 	var at := Vector2(rect.position.x, _baseline(rect.get_center().y, 0.0, f, size))
-	c.draw_string_outline(f, at, shown, align, rect.size.x, size, 10, BG)
-	c.draw_string(f, at, shown, align, rect.size.x, size, color)
+	draw_text(c, f, at, shown, align, rect.size.x, size, BG, 10)
+	draw_text(c, f, at, shown, align, rect.size.x, size, color)
 
 
 ## A skewed shape's hard shadow: box-shadow offsets are in the element's own space, so the skew

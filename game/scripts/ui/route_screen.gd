@@ -15,6 +15,10 @@ var model: Dictionary = {}
 var _hits: Array = []
 var _scale: float = 1.0
 var _origin := Vector2.ZERO
+## The design-space scale and the transform drawing is going through, for RouteSkin.draw_text,
+## which draws text at its on-screen size so it stays sharp.
+var draw_scale: float = 1.0
+var draw_matrix := Transform2D.IDENTITY
 
 
 func _init() -> void:
@@ -41,20 +45,27 @@ func _draw() -> void:
 	_scale = minf(size.x / DESIGN.x, size.y / DESIGN.y)
 	_origin = (size - DESIGN * _scale) * 0.5
 	draw_rect(Rect2(Vector2.ZERO, size), skin.ground)
-	draw_set_transform(_origin, 0.0, Vector2(_scale, _scale))
+	draw_scale = _scale
+	_set_matrix(Transform2D(0.0, Vector2(_scale, _scale), 0.0, _origin))
 	_hits.clear()
 	skin.draw(self, model)
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_set_matrix(Transform2D.IDENTITY)
+	draw_scale = 1.0
 
 
 ## Draws what follows through an extra transform in design space (a rotated label, a skewed
 ## run of text); end with end_local().
 func begin_local(local: Transform2D) -> void:
-	draw_set_transform_matrix(Transform2D(0.0, Vector2(_scale, _scale), 0.0, _origin) * local)
+	_set_matrix(Transform2D(0.0, Vector2(_scale, _scale), 0.0, _origin) * local)
 
 
 func end_local() -> void:
-	draw_set_transform(_origin, 0.0, Vector2(_scale, _scale))
+	_set_matrix(Transform2D(0.0, Vector2(_scale, _scale), 0.0, _origin))
+
+
+func _set_matrix(matrix: Transform2D) -> void:
+	draw_matrix = matrix
+	draw_set_transform_matrix(matrix)
 
 
 ## Registers a clickable area in design space. Later areas win where they overlap.

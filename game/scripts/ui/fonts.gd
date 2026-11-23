@@ -47,3 +47,23 @@ static func get_font(family: String, weight: int = 400, spacing: float = 0.0) ->
 		variant.spacing_glyph = int(round(spacing))
 	_variants[key] = variant
 	return variant
+
+
+static var _scaled: Dictionary = {}
+
+
+## `font` for drawing `scale` times larger (RouteSkin.draw_text): letter spacing is whole pixels
+## at whatever size is drawn, so a variant drawn bigger needs its spacing scaled to keep the
+## design's tracking (to the nearest pixel, or rounded down with `down`, for text that must not
+## come out wider than it measured). Fonts without extra spacing come back as they are.
+static func spaced_for_scale(font: Font, scale: float, down: bool = false) -> Font:
+	var variant := font as FontVariation
+	if variant == null or variant.spacing_glyph == 0:
+		return font
+	var spacing: int = floori(variant.spacing_glyph * scale) if down else int(round(variant.spacing_glyph * scale))
+	var key: String = "%d|%d" % [font.get_instance_id(), spacing]
+	if not _scaled.has(key):
+		var bigger: FontVariation = variant.duplicate() as FontVariation
+		bigger.spacing_glyph = spacing
+		_scaled[key] = bigger
+	return _scaled[key]

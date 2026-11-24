@@ -5,24 +5,22 @@ extends Control
 ## like a bar with small panels"). Between your combo and gas (top left) and your score (top right),
 ## one panel per rival, best first, sliding when places change:
 ##   - place, name and score, and how far ahead of or behind you they are;
-##   - a mini keyboard: their ten home keys and the nine sharps above them, lighting as they hit and
-##     red where they miss; a glance says whether a rival is on fire or falling apart. One soft white,
-##     not the fingers' colours: those belong to your own notes, and a rainbow strip above the road
-##     kept pulling the eye off it (graphics review of the 4-player test, 2026-11-23);
-##   - their gas along the bottom edge; OUT OF GAS, FINISHED or LEFT over the panel when it applies.
+##   - their own highway in miniature (RivalHighway): the same notes, in the fingers' colours, with
+##     their keycaps lighting, bursts on their hits and red on their misses, a moment behind the race.
+##     (It replaced a mini keyboard of soft white lights: Evan wanted the rivals more visual, "glow and
+##     caps but highway alone is fine", 2026-11-23.)
+##   - their gas along the bottom edge; OUT OF GAS, FINISHED or LEFT over the road when it applies.
 ## Under your score, on the same kind of plate: your own place, and your lead over the next racer or
 ## the gap to the one ahead. Names are cut to NAME_CHARS everywhere (short_name).
-## Fed every frame by main.gd from Battle.standings(); it never touches the run.
+## Fed every frame by main.gd from Battle.standings(); it never touches the run. main.gd hands it the
+## race's chart and clock (race()) so each rival's road plays the same song at the same moment.
 
-const PANEL_W := 290.0
-const PANEL_H := 74.0
+const PANEL_W := 300.0
+const PANEL_H := 156.0
 const GAP := 16.0
 const TOP := 14.0
-## A key's light fades over this long after a hit or a miss arrives.
-const FLASH := 0.45
-const PILL_W := 17.0
-const PILL_H := 9.0
-const PILL_GAP := 4.0
+## The mini highway's place in a panel, under the name and score.
+const VIEW := Rect2(6, 46, PANEL_W - 12, PANEL_H - 56)
 ## Panels glide to a new place over about this long when places change.
 const SLIDE := 0.25
 const ORDINALS: Array[String] = ["1ST", "2ND", "3RD", "4TH"]
@@ -34,6 +32,17 @@ const MISSED := Color(1.0, 0.36, 0.42)
 var _panels: Dictionary = {}
 var _my_place: Label
 var _my_gap: Label
+## The race: the chart file and level everyone plays, and the run's song clock (seconds).
+var _chart_path: String = ""
+var _level: String = "normal"
+var _clock: Callable
+
+
+## The race's chart and the run's clock, for the rivals' roads. Before any refresh.
+func race(chart_path: String, level: String, clock: Callable) -> void:
+	_chart_path = chart_path
+	_level = level
+	_clock = clock
 
 
 func _ready() -> void:
@@ -118,64 +127,76 @@ func _make_panel(x: float) -> Dictionary:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 	# The place gets its own column (a 30 px "2ND" ran into the name in the first two-window test).
-	var place := Ui.heading("", 24, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(place, 0.0, 0.0, 0.0, 0.0, 6, 8, 66, 40, HORIZONTAL_ALIGNMENT_CENTER)
+	var place := Ui.shrink_to_fit(Ui.heading("4TH", 26, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER), 64.0, 16)
+	place.text = ""
+	Ui.anchor(place, 0.0, 0.0, 0.0, 0.0, 6, 6, 74, 40, HORIZONTAL_ALIGNMENT_CENTER)
 	root.add_child(place)
-	var name := Ui.label("", 17, Ui.MUTED)
+	var name := Ui.label("", 18, Ui.TEXT)
 	name.clip_text = true
 	name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	Ui.anchor(name, 0.0, 0.0, 0.0, 0.0, 76, 9, 176, 33)
+	Ui.anchor(name, 0.0, 0.0, 0.0, 0.0, 80, 3, 176, 25)
 	root.add_child(name)
-	var score := Ui.heading("0", 28, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT)
-	Ui.anchor(score, 0.0, 0.0, 0.0, 0.0, 150, 1, PANEL_W - 12, 35, HORIZONTAL_ALIGNMENT_RIGHT)
-	root.add_child(score)
-	var gap := Ui.caption("", 15, Ui.MUTED, HORIZONTAL_ALIGNMENT_CENTER)
-	Ui.anchor(gap, 0.0, 0.0, 0.0, 0.0, 4, 44, 68, 64, HORIZONTAL_ALIGNMENT_CENTER)
+	var gap := Ui.caption("", 17, Color(Ui.TEXT, 0.82))
+	Ui.anchor(gap, 0.0, 0.0, 0.0, 0.0, 80, 23, 176, 43)
 	root.add_child(gap)
-	# The mini keyboard: home keys along the bottom, sharps above and between them, as on a keyboard.
-	var keys := Control.new()
-	keys.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var width: float = KeyMap.COUNT * PILL_W + (KeyMap.COUNT - 1) * PILL_GAP
-	Ui.anchor(keys, 0.0, 0.0, 0.0, 0.0, PANEL_W - 12 - width, 38, PANEL_W - 12, 38 + PILL_H * 2 + 5)
+	# Sized so a six-figure score fits beside the name in the widest region face.
+	var score := Ui.shrink_to_fit(Ui.heading("888,888", 30, Ui.TEXT, HORIZONTAL_ALIGNMENT_RIGHT), PANEL_W - 12.0 - 180.0, 18)
+	score.text = "0"
+	Ui.anchor(score, 0.0, 0.0, 0.0, 0.0, 180, 2, PANEL_W - 12, 40, HORIZONTAL_ALIGNMENT_RIGHT)
+	root.add_child(score)
+	# Their road in miniature (RivalHighway), on the race's chart, in a thin frame so it holds its edge
+	# against a dark sky (graphics review 2).
+	var frame := Panel.new()
+	var frame_box := StyleBoxFlat.new()
+	frame_box.bg_color = Color(0, 0, 0, 0)
+	frame_box.set_border_width_all(1)
+	frame_box.border_color = Color(Ui.TEXT, 0.28)
+	frame.add_theme_stylebox_override("panel", frame_box)
+	Ui.anchor(frame, 0.0, 0.0, 0.0, 0.0, VIEW.position.x - 1, VIEW.position.y - 1, VIEW.end.x + 1, VIEW.end.y + 1)
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(frame)
+	var keys := RivalHighway.new()
+	Ui.anchor(keys, 0.0, 0.0, 0.0, 0.0, VIEW.position.x, VIEW.position.y, VIEW.end.x, VIEW.end.y)
 	root.add_child(keys)
-	var pills: Array[ColorRect] = []
-	for lane: int in KeyMap.COUNT + KeyMap.SHARPS.size():
-		var pill := ColorRect.new()
-		var sharp: bool = KeyMap.is_sharp(lane)
-		var i: int = lane - KeyMap.SHARP_BASE if sharp else lane
-		var px: float = i * (PILL_W + PILL_GAP) + ((PILL_W + PILL_GAP) * 0.5 if sharp else 0.0)
-		pill.position = Vector2(px + (3.0 if sharp else 0.0), 0.0 if sharp else PILL_H + 5.0)
-		pill.size = Vector2(PILL_W - (6.0 if sharp else 0.0), PILL_H - (2.0 if sharp else 0.0))
-		pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		keys.add_child(pill)
-		pills.append(pill)
+	if not _chart_path.is_empty():
+		keys.setup(_chart_path, _level)
+		keys.stagger(_panels.size())
 	var gas_track := ColorRect.new()
 	gas_track.color = Color(1, 1, 1, 0.1)
-	Ui.anchor(gas_track, 0.0, 1.0, 1.0, 1.0, 10, -6, -10, -3)
+	Ui.anchor(gas_track, 0.0, 1.0, 1.0, 1.0, 10, -7, -10, -3)
 	gas_track.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(gas_track)
 	var gas := ColorRect.new()
 	gas.anchor_bottom = 1.0
 	gas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	gas_track.add_child(gas)
-	# OUT OF GAS, FINISHED or LEFT takes the mini keyboard's place: over the name and score it hid them.
-	var status := Ui.heading("", 20, Ui.WARM, HORIZONTAL_ALIGNMENT_RIGHT)
-	Ui.anchor(status, 0.0, 0.0, 0.0, 0.0, 70, 34, PANEL_W - 12, 64, HORIZONTAL_ALIGNMENT_RIGHT)
+	# OUT OF GAS, FINISHED or LEFT across their road, which stops where it was.
+	var status := Ui.heading("", 20, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
+	status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	Ui.anchor(status, 0.0, 0.0, 0.0, 0.0, VIEW.position.x, VIEW.position.y, VIEW.end.x, VIEW.end.y, HORIZONTAL_ALIGNMENT_CENTER)
+	status.add_theme_constant_override("outline_size", 6)
+	status.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	status.visible = false
 	root.add_child(status)
-	return {"root": root, "keys": keys, "place": place, "name": name, "score": score, "gap": gap, "pills": pills, "gas": gas,
-		"status": status, "glow": PackedFloat32Array(), "miss": PackedFloat32Array(), "at": -1, "x": x}
+	return {"root": root, "keys": keys, "place": place, "name": name, "score": score, "gap": gap, "gas": gas,
+		"status": status, "at": -1, "x": x}
 
 
 func _update_panel(p: Dictionary, row: Dictionary, place: int, my_score: int, target_x: float, delta: float) -> void:
 	var entry: Dictionary = Battle.live.get(int(row["peer"]), {})
 	var state: int = int(row["state"])
 	_set_text(p["place"], ORDINALS[mini(place, 3)])
-	_set_text(p["name"], short_name(str(row["name"])))
+	var name_label: Label = p["name"]
+	var shown_name: String = short_name(str(row["name"]))
+	if name_label.text != shown_name:
+		name_label.text = shown_name
+		# A long name steps down a size or two before it is cut.
+		name_label.add_theme_font_size_override("font_size", 18)
+		Ui.shrink_to_fit(name_label, 94.0, 13)
 	_set_text(p["score"], _num(int(row["score"])))
 	var lead: int = int(row["score"]) - my_score
 	_set_text(p["gap"], ("+" if lead > 0 else ("−" if lead < 0 else "±")) + _short(absi(lead)))
-	(p["gap"] as Label).add_theme_color_override("font_color", Ui.WARM if lead > 0 else Ui.MUTED)
+	(p["gap"] as Label).add_theme_color_override("font_color", Ui.WARM if lead > 0 else Color(Ui.TEXT, 0.82))
 	# Places change: the panel glides to its new slot instead of jumping.
 	var x: float = lerpf(float(p["x"]), target_x, clampf(delta / SLIDE * 3.0, 0.0, 1.0))
 	if absf(x - target_x) < 0.5:
@@ -184,27 +205,16 @@ func _update_panel(p: Dictionary, row: Dictionary, place: int, my_score: int, ta
 	var root: Panel = p["root"]
 	root.offset_left = x
 	root.offset_right = x + PANEL_W
-	# A new state message lights the keys it reports; the light fades between messages.
-	var glow: PackedFloat32Array = p["glow"]
-	var miss: PackedFloat32Array = p["miss"]
-	var pills: Array[ColorRect] = p["pills"]
-	if glow.is_empty():
-		glow.resize(pills.size())
-		miss.resize(pills.size())
+	# Their road: each new report lands its hits and misses, and it plays on with the race's clock.
+	var view: RivalHighway = p["keys"]
+	var race_now: float = float(_clock.call()) if _clock.is_valid() else 0.0
 	if int(entry.get("at", -1)) != int(p["at"]):
 		p["at"] = int(entry.get("at", -1))
-		for lane: int in pills.size():
-			if int(entry.get("hit_lanes", 0)) & (1 << lane):
-				glow[lane] = 1.0
-			if int(entry.get("miss_lanes", 0)) & (1 << lane):
-				miss[lane] = 1.0
-	for lane: int in pills.size():
-		glow[lane] = maxf(glow[lane] - delta / FLASH, 0.0)
-		miss[lane] = maxf(miss[lane] - delta / FLASH, 0.0)
-		var lit: Color = Color(LIT, 0.13).lerp(Color(LIT, 0.8), glow[lane])
-		pills[lane].color = lit.lerp(MISSED, miss[lane])
-	p["glow"] = glow
-	p["miss"] = miss
+		view.report(int(entry.get("hit_lanes", 0)), int(entry.get("miss_lanes", 0)), int(entry.get("hits", 0)), race_now)
+	if state == Battle.STATE_DRIVING:
+		view.advance(race_now, delta)
+	else:
+		view.freeze()
 	var fuel: float = clampf(float(entry.get("fuel", 1.0)), 0.0, 1.0)
 	var gas: ColorRect = p["gas"]
 	gas.anchor_right = fuel
@@ -212,9 +222,8 @@ func _update_panel(p: Dictionary, row: Dictionary, place: int, my_score: int, ta
 	var status: Label = p["status"]
 	var words: String = {Battle.STATE_OUT: "OUT OF GAS", Battle.STATE_DONE: "FINISHED", Battle.STATE_LEFT: "LEFT"}.get(state, "")
 	status.visible = not words.is_empty()
-	(p["keys"] as Control).visible = words.is_empty()
 	_set_text(status, words)
-	status.add_theme_color_override("font_color", MISSED if state == Battle.STATE_OUT else Ui.TEXT)
+	status.add_theme_color_override("font_color", Color(MISSED, 0.9) if state == Battle.STATE_OUT else Ui.TEXT)
 	# A racer who's out, finished or gone steps back, so the eye goes to the ones still racing.
 	var dim: float = 1.0 if words.is_empty() else 0.4
 	for child: Node in root.get_children():

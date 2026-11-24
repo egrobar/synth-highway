@@ -26,6 +26,9 @@ extends Node3D
 static var lookahead: float = 3.0
 ## Whether notes carry their key's letter. A setting.
 static var show_letters: bool = true
+## Whether this highway shows letters at all (notes and keys): off on a rival's miniature road
+## (RivalHighway), where letters a few pixels high read as noise.
+var letters: bool = true
 
 const LENGTH := 46.0
 const KEY_WIDTH := 1.6
@@ -247,7 +250,7 @@ func _place(view: NoteView, now: float, speed: float) -> void:
 	var missed: bool = n.state == Chart.NoteState.MISSED
 	view.root.position = Vector3(lane_x(n.lane), 0.0, 0.0)
 	view.head.visible = not hit
-	view.label.visible = show_letters and not hit and not missed
+	view.label.visible = letters and show_letters and not hit and not missed
 	# A missed power note loses its halo, so the dark red of a miss reads the same as anywhere else.
 	view.aura.visible = n.power and not hit and not missed
 	if not hit:
@@ -581,6 +584,7 @@ func _build_keyboard() -> void:
 		label.shaded = false
 		label.position = Vector3(x, 0.512, 1.2)
 		label.set_meta("rest_y", 0.512)
+		label.visible = letters
 		add_child(label)
 		parts.append(label)
 		# A strip in the finger's colour along the key's far edge, where the notes land.
@@ -619,6 +623,7 @@ func _build_sharp_keys() -> void:
 		label.shaded = false
 		label.position = Vector3(x, 0.98, 0.55)
 		label.set_meta("rest_y", 0.98)
+		label.visible = letters
 		add_child(label)
 		parts.append(label)
 		_keys[lane] = {"material": mat, "pressed": 0, "wrong": 0.0, "parts": parts}

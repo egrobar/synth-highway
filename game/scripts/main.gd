@@ -1306,6 +1306,8 @@ func _start_run(song: Dictionary, battle: Dictionary = {}) -> void:
 			_battle_hit_lanes |= 1 << n.lane)
 		_session.judge.note_missed.connect(func(n: Chart.Note) -> void: _battle_miss_lanes |= 1 << n.lane)
 		_rival_bar = RivalBar.new()
+		# Each rival's road plays this chart in step with this run's clock.
+		_rival_bar.race(str(song["path"]), str(battle["level"]), func() -> float: return _session.clock.now() if _session else 0.0)
 		# Under the run's own HUD layer, below the leave menu the run opens over it.
 		_session.hud().add_child(_rival_bar)
 		_session.hud().move_child(_rival_bar, 0)

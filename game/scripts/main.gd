@@ -28,6 +28,9 @@ extends Node
 ## and the standings; the route doubles as the song picker for the draw (_battle_pick), and a race
 ## is an ordinary run with the battle options (no pause, a lead-in that ends on the race's start)
 ## and the rivals along the top (RivalBar). Battle runs are never saved.
+## Items (scripts/battle/items.gd): a box every 50 in a streak and for each power chord struck whole,
+## rolled stronger the further behind you are; 1, 2 or 3 sends an attack to that rival's panel or uses
+## a boost (ItemSlot, ItemEffects, Battle.send_item). In automatic test races the bot fires its items.
 ##
 ## Options for automated checks, passed after "--" on the command line:
 ##   --bot=perfect|tapper|sloppy|afk  --song=<id>  --difficulty=easy|normal|hard
@@ -60,7 +63,8 @@ const CALIBRATE_CLICKS := 12
 const CALIBRATE_INTERVAL := 0.6
 const CALIBRATE_SKIP := 2
 const SHOT_TIMES: Array[float] = [-1.0, 9.0, 12.2, 33.0, 60.0]
-const SFX_NAMES: Array[String] = ["click", "wrong", "ui", "held", "out_of_gas", "milestone", "clear"]
+const SFX_NAMES: Array[String] = ["click", "wrong", "ui", "held", "out_of_gas", "milestone", "clear",
+	"item_tick", "item_ready", "item_send", "item_hit", "item_block"]
 const AUDIO_FILTERS := "*.mp3, *.wav, *.flac, *.ogg, *.aiff, *.aif, *.mid, *.midi ; Songs (audio or MIDI)"
 
 var _screen: Screen = Screen.TITLE
@@ -120,6 +124,14 @@ var _battle_pick: bool = false
 ## This run is a battle race.
 var _battle_racing: bool = false
 var _rival_bar: RivalBar
+## Battle items (BattleItems) in this run: your slot, what hits your road, the race's power chords
+## (each struck whole earns a box, once) and a dice for the boxes.
+var _item_slot: ItemSlot
+var _item_effects: ItemEffects
+var _item_chords: Array = []
+var _item_chord_of: Dictionary = {}
+var _item_chords_earned: Dictionary = {}
+var _item_rng := RandomNumberGenerator.new()
 ## Lanes this player hit or missed since the last report to Battle (the rivals' mini keyboards).
 var _battle_hit_lanes: int = 0
 var _battle_miss_lanes: int = 0
@@ -186,6 +198,9 @@ func _ready() -> void:
 	Battle.race_starting.connect(_on_race_starting)
 	Battle.standings_changed.connect(_on_battle_standings)
 	Battle.closed.connect(_on_battle_closed)
+	Battle.item_sent.connect(_on_item_sent)
+	Battle.item_blocked.connect(_on_item_blocked)
+	_item_rng.randomize()
 	if _options.has("battle-auto"):
 		Battle.auto = true
 	if _options.has("battle-name"):
@@ -347,6 +362,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				_route_key(code)
 		Screen.MAP:
 			_map_key(code)
+		Screen.PLAYING:
+			if _battle_racing:
+				_item_key(code)
 		Screen.SETTINGS:
 			_settings_key(code)
 		Screen.CALIBRATE:
@@ -387,6 +405,8 @@ func _clear_ui() -> void:
 	_toast = null
 	_battle_screen = null
 	_rival_bar = null
+	_item_slot = null
+	_item_effects = null
 	_title = null
 
 
@@ -1311,6 +1331,7 @@ func _start_run(song: Dictionary, battle: Dictionary = {}) -> void:
 		# Under the run's own HUD layer, below the leave menu the run opens over it.
 		_session.hud().add_child(_rival_bar)
 		_session.hud().move_child(_rival_bar, 0)
+		_start_items(chart, highway)
 
 
 ## The next song in this region, or the first of the next region once it is open.
@@ -1800,6 +1821,111 @@ func _leave_battle(message: String) -> void:
 	_show_toast(message)
 
 
+# ---------------------------------------------------------------- battle items
+
+## A battle run's items (BattleItems): the slot under your combo and gas, what hits your road
+## (ItemEffects), and the boxes you earn: every 50 in a streak and each power chord struck whole.
+func _start_items(chart: Chart, highway: Highway) -> void:
+	_item_effects = ItemEffects.new()
+	_session.add_child(_item_effects)
+	_item_effects.setup(_stage, highway, _session.judge, _session.hud())
+	_item_slot = ItemSlot.new()
+	_session.hud().add_child(_item_slot)
+	_item_slot.ticked.connect(func() -> void: (_sfx["item_tick"] as AudioStreamPlayer).play())
+	_item_slot.rolled.connect(func(_id: String) -> void: (_sfx["item_ready"] as AudioStreamPlayer).play())
+	_item_chords = chart.power_chords()
+	_item_chord_of.clear()
+	_item_chords_earned.clear()
+	for i: int in _item_chords.size():
+		for n: Chart.Note in _item_chords[i]:
+			_item_chord_of[n.get_instance_id()] = i
+	_session.judge.note_hit.connect(_on_item_note_hit)
+
+
+func _on_item_note_hit(n: Chart.Note, _verdict: String, _offset: float) -> void:
+	if not _battle_racing or _item_slot == null:
+		return
+	var judge: Judge = _session.judge
+	if judge.combo > 0 and judge.combo % BattleItems.COMBO_STEP == 0:
+		_earn_item()
+	var chord: int = int(_item_chord_of.get(n.get_instance_id(), -1))
+	if chord >= 0 and not _item_chords_earned.has(chord):
+		for other: Chart.Note in _item_chords[chord]:
+			if other.state != Chart.NoteState.HIT:
+				return
+		_item_chords_earned[chord] = true
+		_earn_item()
+
+
+## A box, rolled for your place: the further behind, the stronger (BattleItems.roll()).
+func _earn_item() -> void:
+	if _item_slot.state != ItemSlot.State.EMPTY:
+		return
+	var rows: Array = Battle.standings()
+	var place: int = 0
+	for i: int in rows.size():
+		if bool(rows[i]["me"]):
+			place = i
+	_item_slot.earn(BattleItems.roll(place, rows.size(), _item_rng))
+
+
+## 1, 2 or 3 in a battle run: send the held attack to that panel's rival, or use the held boost.
+func _item_key(code: Key) -> void:
+	var index: int = [KEY_1, KEY_2, KEY_3].find(code)
+	if index < 0:
+		index = [KEY_KP_1, KEY_KP_2, KEY_KP_3].find(code)
+	if index < 0 or _item_slot == null or _item_slot.state != ItemSlot.State.READY or _rival_bar == null:
+		return
+	var item: String = _item_slot.item
+	var target: int = Battle.me()
+	if BattleItems.is_attack(item):
+		target = _rival_bar.target_peer(index)
+		if target == 0:
+			_item_effects.feed("THEY'RE OUT", item, false)
+			return
+	_item_slot.take()
+	(_sfx["item_send"] as AudioStreamPlayer).play()
+	Battle.send_item(target, item)
+
+
+## Someone used an item: hit your road (or your Shield takes it), start your boost, or show it.
+func _on_item_sent(from: int, to: int, item: String) -> void:
+	print("BATTLE_ITEM ", JSON.stringify({"from": from, "to": to, "item": item, "me": Battle.me()}))
+	if not _battle_racing or _item_effects == null:
+		return
+	var me: int = Battle.me()
+	var from_name: String = "YOU" if from == me else RivalBar.short_name(Battle.name_of(from)).to_upper()
+	var to_name: String = "YOU" if to == me else RivalBar.short_name(Battle.name_of(to)).to_upper()
+	if from == to:
+		if to == me:
+			_item_effects.apply(item)
+		elif _rival_bar:
+			_rival_bar.show_item(to, item)
+		_item_effects.feed("%s · %s" % [from_name, BattleItems.item_name(item)], item, false)
+		return
+	if to == me:
+		if _item_effects.receive(item):
+			(_sfx["item_hit"] as AudioStreamPlayer).play()
+			_item_effects.feed("%s → YOU" % from_name, item, true)
+		else:
+			(_sfx["item_block"] as AudioStreamPlayer).play()
+			Battle.block_item(from, item)
+			_item_effects.feed("BLOCKED · %s" % from_name, "shield", true)
+		return
+	if _rival_bar:
+		_rival_bar.show_item(to, item)
+	_item_effects.feed("%s → %s" % [from_name, to_name], item, false)
+
+
+func _on_item_blocked(from: int, to: int, _item: String) -> void:
+	if not _battle_racing or _item_effects == null or to == Battle.me():
+		return
+	if _rival_bar:
+		_rival_bar.clear_item(to)
+	var to_name: String = RivalBar.short_name(Battle.name_of(to)).to_upper()
+	_item_effects.feed("%s BLOCKED" % to_name if from != Battle.me() else "%s BLOCKED YOU" % to_name, "shield", false)
+
+
 ## Every frame of a race: this run's numbers to the others, and the rivals' panels.
 func _report_race(delta: float) -> void:
 	var judge: Judge = _session.judge
@@ -1809,7 +1935,16 @@ func _report_race(delta: float) -> void:
 	_battle_hit_lanes = 0
 	_battle_miss_lanes = 0
 	if _rival_bar:
+		_rival_bar.aiming = _item_slot != null and _item_slot.state == ItemSlot.State.READY \
+			and BattleItems.is_attack(_item_slot.item)
 		_rival_bar.refresh(delta)
+	if _item_slot and _item_effects:
+		_item_slot.set_progress(float(judge.combo % BattleItems.COMBO_STEP) / BattleItems.COMBO_STEP)
+		# Automatic test races (--battle-auto, WASD test runs): the bot fires its items at the first rival.
+		if Battle.auto and _item_slot.state == ItemSlot.State.READY:
+			_item_key(KEY_1)
+		var line: Array = _item_effects.status()
+		_item_slot.set_status(str(line[0]), line[1])
 
 
 ## --battle-auto and WASD test runs: suggest a song as soon as you're in the lobby, and as host,

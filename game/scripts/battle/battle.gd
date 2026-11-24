@@ -587,6 +587,54 @@ func _state(packed: PackedInt32Array) -> void:
 		"state": packed[8], "at": Time.get_ticks_usec()}, true)
 
 
+# ---------------------------------------------------------------- items
+
+## Somebody used an item (BattleItems): an attack from `from` at `to`, or a boost on themself
+## (to == from). Everyone hears it: the target applies it, the others show it in their feed.
+signal item_sent(from: int, to: int, item: String)
+## The target's Shield took an attack.
+signal item_blocked(from: int, to: int, item: String)
+
+
+## Sends an item from this player: an attack to the racer `to`, or a boost on yourself (to == me()).
+func send_item(to: int, item: String) -> void:
+	if phase != Phase.RACING or not BattleItems.ITEMS.has(item):
+		return
+	if _online():
+		_item.rpc(me(), to, item)
+	else:
+		item_sent.emit(me(), to, item)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _item(from: int, to: int, item: String) -> void:
+	var sender: int = multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = me()
+	# Only a racer's own game sends its items, at racers in this race.
+	if sender != from or phase != Phase.RACING or not live.has(from) or not live.has(to) or not BattleItems.ITEMS.has(item):
+		return
+	item_sent.emit(from, to, item)
+
+
+## This player's Shield took `from`'s attack: everyone hears it was blocked.
+func block_item(from: int, item: String) -> void:
+	if _online():
+		_blocked.rpc(from, me(), item)
+	else:
+		item_blocked.emit(from, me(), item)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func _blocked(from: int, to: int, item: String) -> void:
+	var sender: int = multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = me()
+	if sender != to or phase != Phase.RACING:
+		return
+	item_blocked.emit(from, to, item)
+
+
 ## This player's run ended (finished or out of gas): every peer files the numbers.
 func finish(result: Dictionary) -> void:
 	if phase != Phase.RACING:
@@ -669,6 +717,11 @@ func _to_lobby() -> void:
 	if is_host():
 		_push_lobby()
 	changed.emit()
+
+
+## A racer's name, as the battle shows it.
+func name_of(id: int) -> String:
+	return _name_of(id)
 
 
 func _name_of(id: int) -> String:

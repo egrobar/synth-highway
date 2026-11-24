@@ -35,6 +35,12 @@ var _first_region: Array = []
 var _first_region_wait: int = 2
 ## Web renderer: the 3D view is off for the frame the first world was built in.
 var _view_off: bool = false
+## Battle items (ItemEffects): an Earthquake shakes and bumps the camera, a Wobble sways and rolls it,
+## each for its seconds left. Gentler with Settings.motion off (they are still attacks, just smaller).
+var _quake_left: float = 0.0
+var _quake_time: float = 0.0
+var _wobble_left: float = 0.0
+var _wobble_time: float = 0.0
 
 
 func _ready() -> void:
@@ -67,7 +73,42 @@ func _process(delta: float) -> void:
 	var offset := Vector3.ZERO
 	if _jolt > 0.0:
 		offset = Vector3(_jolt_rng.randf_range(-1.0, 1.0), _jolt_rng.randf_range(-1.0, 1.0), 0.0) * 0.07 * _jolt
-	camera.look_at_from_position(CAMERA_POSITION + offset, CAMERA_TARGET)
+	var roll: float = 0.0
+	var size: float = 1.0 if Settings.motion else 0.35
+	if _quake_left > 0.0:
+		_quake_left -= delta
+		_quake_time += delta
+		var fade: float = clampf(_quake_left / 0.5, 0.0, 1.0) * size
+		offset += Vector3(_jolt_rng.randf_range(-1.0, 1.0) * 0.16, absf(sin(_quake_time * 10.5)) * 0.5
+			+ _jolt_rng.randf_range(-1.0, 1.0) * 0.06, 0.0) * fade
+		roll += sin(_quake_time * 21.0) * 0.03 * fade
+	if _wobble_left > 0.0:
+		_wobble_left -= delta
+		_wobble_time += delta
+		var sway: float = clampf(_wobble_left / 0.5, 0.0, 1.0) * clampf(_wobble_time / 0.5, 0.0, 1.0) * size
+		offset.x += sin(_wobble_time * 1.4) * 1.7 * sway
+		roll += sin(_wobble_time * 1.9) * deg_to_rad(9.0) * sway
+	camera.look_at_from_position(CAMERA_POSITION + offset, CAMERA_TARGET + Vector3(offset.x * 0.5, 0.0, 0.0))
+	if roll != 0.0:
+		camera.rotate_object_local(Vector3(0.0, 0.0, 1.0), roll)
+
+
+## An Earthquake on this road (a battle item) for `seconds`.
+func quake(seconds: float) -> void:
+	_quake_left = maxf(_quake_left, seconds)
+	_quake_time = 0.0
+
+
+## A Wobble on this road (a battle item) for `seconds`.
+func wobble(seconds: float) -> void:
+	_wobble_left = maxf(_wobble_left, seconds)
+	_wobble_time = 0.0
+
+
+## Ends both at once (the run ended).
+func calm() -> void:
+	_quake_left = 0.0
+	_wobble_left = 0.0
 
 
 ## A short camera shake, 0 to 1. Used for a missed note.

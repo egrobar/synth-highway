@@ -29,6 +29,13 @@ static var show_letters: bool = true
 ## Whether this highway shows letters at all (notes and keys): off on a rival's miniature road
 ## (RivalHighway), where letters a few pixels high read as noise.
 var letters: bool = true
+## Battle items (ItemEffects) acting on this road. paint: lane -> the finger colour (0-4, or 5 for the
+## sharps' orange) its notes wear instead of their own (Paint Bomb). speed_scale: how much faster the
+## notes travel (Turbo: same timing, half the warning). fog_depth: notes farther up the road than this
+## stay hidden (Fog Bank; 0 for none).
+var paint: Dictionary = {}
+var speed_scale: float = 1.0
+var fog_depth: float = 0.0
 
 const LENGTH := 46.0
 const KEY_WIDTH := 1.6
@@ -152,7 +159,7 @@ static func lane_x(lane: int) -> float:
 
 
 func units_per_second() -> float:
-	return LENGTH / lookahead
+	return LENGTH / lookahead * speed_scale
 
 
 ## A beat landed: the hit line flares and settles. Display only.
@@ -249,6 +256,9 @@ func _place(view: NoteView, now: float, speed: float) -> void:
 	var hit: bool = n.state == Chart.NoteState.HIT
 	var missed: bool = n.state == Chart.NoteState.MISSED
 	view.root.position = Vector3(lane_x(n.lane), 0.0, 0.0)
+	# Past the road's far end (Turbo sends notes from twice as far) or inside a Fog Bank: not yet shown.
+	var hidden: bool = z_head < -(LENGTH + 1.0) or (fog_depth > 0.0 and z_head < -fog_depth)
+	view.root.visible = not hidden
 	view.head.visible = not hit
 	view.label.visible = letters and show_letters and not hit and not missed
 	# A missed power note loses its halo, so the dark red of a miss reads the same as anywhere else.
@@ -329,6 +339,11 @@ func _release(view: NoteView) -> void:
 
 
 func _head_material(n: Chart.Note) -> StandardMaterial3D:
+	if paint.has(n.lane):
+		var swapped: int = int(paint[n.lane])
+		if swapped >= KeyMap.FINGER_COLORS.size():
+			return _mat_sharp_power if n.power else _mat_sharp
+		return (_mat_heads_power if n.power else _mat_heads)[swapped]
 	if KeyMap.is_sharp(n.lane):
 		return _mat_sharp_power if n.power else _mat_sharp
 	return (_mat_heads_power if n.power else _mat_heads)[KeyMap.finger_for(n.lane)]
@@ -453,6 +468,7 @@ func _update_beat_lines(now: float, speed: float) -> void:
 			line.material_override = _mat_bar if bar else _mat_beat
 			line.scale = Vector3(half_width() * 2.0 + 1.0, 0.012, 0.16 if bar else 0.07)
 			line.position = Vector3(0.0, 0.02, -(t - now) * speed)
+			line.visible = line.position.z > -(LENGTH + 1.0)
 			used += 1
 		index += 1
 	for j: int in range(used, _beat_pool.size()):

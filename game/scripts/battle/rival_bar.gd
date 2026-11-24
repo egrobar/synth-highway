@@ -36,6 +36,10 @@ var _my_gap: Label
 var _chart_path: String = ""
 var _level: String = "normal"
 var _clock: Callable
+## Battle items (BattleItems): the rivals' peers in panel order, left to right (1, 2, 3 send to them),
+## and whether you are holding an attack (their key badges light up).
+var _order: Array[int] = []
+var aiming: bool = false
 
 
 ## The race's chart and the run's clock, for the rivals' roads. Before any refresh.
@@ -81,6 +85,9 @@ func refresh(delta: float) -> void:
 		else:
 			rivals.append(rows[i])
 	_show_me(rows, my_row, my_place)
+	_order.clear()
+	for row: Dictionary in rivals:
+		_order.append(int(row["peer"]))
 	var count: int = rivals.size()
 	var span: float = count * PANEL_W + maxf(count - 1, 0) * GAP
 	for i: int in count:
@@ -170,6 +177,30 @@ func _make_panel(x: float) -> Dictionary:
 	gas.anchor_bottom = 1.0
 	gas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	gas_track.add_child(gas)
+	# The key that sends them an item (1, 2, 3 by panel, left to right): over the panel's top-left
+	# corner, lit while you hold an attack.
+	var key_chip := Panel.new()
+	var chip_box := StyleBoxFlat.new()
+	chip_box.bg_color = Color(0.03, 0.03, 0.06, 0.95)
+	chip_box.set_border_width_all(2)
+	chip_box.border_color = Ui.ACCENT
+	chip_box.set_corner_radius_all(6)
+	key_chip.add_theme_stylebox_override("panel", chip_box)
+	Ui.anchor(key_chip, 0.0, 0.0, 0.0, 0.0, -16, -12, 14, 18)
+	key_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var key_text := Ui.caption("", 18, Ui.ACCENT, HORIZONTAL_ALIGNMENT_CENTER)
+	key_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	Ui.anchor(key_text, 0.0, 0.0, 1.0, 1.0, 0, 0, 0, 0, HORIZONTAL_ALIGNMENT_CENTER)
+	key_chip.add_child(key_text)
+	root.add_child(key_chip)
+	# An item hitting them: its icon on their road, with the time it has left.
+	var badge := TextureRect.new()
+	badge.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	badge.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	Ui.anchor(badge, 0.0, 0.0, 0.0, 0.0, VIEW.end.x - 44, VIEW.position.y + 4, VIEW.end.x - 4, VIEW.position.y + 44)
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.visible = false
+	root.add_child(badge)
 	# OUT OF GAS, FINISHED or LEFT across their road, which stops where it was.
 	var status := Ui.heading("", 20, Ui.WARM, HORIZONTAL_ALIGNMENT_CENTER)
 	status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -179,7 +210,8 @@ func _make_panel(x: float) -> Dictionary:
 	status.visible = false
 	root.add_child(status)
 	return {"root": root, "keys": keys, "place": place, "name": name, "score": score, "gap": gap, "gas": gas,
-		"status": status, "at": -1, "x": x}
+		"status": status, "at": -1, "x": x, "key_chip": key_chip, "key_text": key_text, "badge": badge,
+		"item": "", "item_left": 0.0}
 
 
 func _update_panel(p: Dictionary, row: Dictionary, place: int, my_score: int, target_x: float, delta: float) -> void:
@@ -215,6 +247,30 @@ func _update_panel(p: Dictionary, row: Dictionary, place: int, my_score: int, ta
 		view.advance(race_now, delta)
 	else:
 		view.freeze()
+	# Their key, and an item hitting them: its icon, and their road shaking, swaying or dark to match.
+	var slot: int = _order.find(int(row["peer"]))
+	_set_text(p["key_text"], str(slot + 1) if slot >= 0 and slot < 3 else "")
+	(p["key_chip"] as Control).visible = slot >= 0 and slot < 3 and state == Battle.STATE_DRIVING
+	(p["key_chip"] as Control).modulate.a = 1.0 if aiming else 0.45
+	var badge: TextureRect = p["badge"]
+	var item: String = str(p["item"])
+	p["item_left"] = maxf(float(p["item_left"]) - delta, 0.0)
+	var hit_on: bool = not item.is_empty() and float(p["item_left"]) > 0.0
+	badge.visible = hit_on
+	view.position = VIEW.position
+	view.modulate = Color.WHITE
+	if hit_on:
+		var t: float = float(Time.get_ticks_msec()) / 1000.0
+		badge.modulate.a = 0.7 + 0.3 * sin(t * 8.0)
+		match item:
+			"quake":
+				view.position += Vector2(randf_range(-2.0, 2.0), absf(sin(t * 10.5)) * -3.0)
+			"wobble":
+				view.position.x += sin(t * 1.4) * 4.0
+			"blackout":
+				view.modulate = Color(0.25, 0.25, 0.3)
+			"disco":
+				view.modulate = Color.from_hsv(fmod(t * 0.7, 1.0), 0.35, 1.0)
 	var fuel: float = clampf(float(entry.get("fuel", 1.0)), 0.0, 1.0)
 	var gas: ColorRect = p["gas"]
 	gas.anchor_right = fuel
@@ -229,6 +285,32 @@ func _update_panel(p: Dictionary, row: Dictionary, place: int, my_score: int, ta
 	for child: Node in root.get_children():
 		if child != status and child is CanvasItem:
 			(child as CanvasItem).modulate.a = dim
+
+
+## The rival that key 1, 2 or 3 (`index` 0 to 2) sends to: their panel's, left to right, or the last
+## panel's when there are fewer rivals. 0 when that rival is out of the race.
+func target_peer(index: int) -> int:
+	if _order.is_empty():
+		return 0
+	var peer: int = _order[mini(index, _order.size() - 1)]
+	var entry: Dictionary = Battle.live.get(peer, {})
+	return peer if int(entry.get("state", Battle.STATE_LEFT)) == Battle.STATE_DRIVING else 0
+
+
+## An item is hitting this rival: its icon on their panel for its time (a moment for one at once).
+func show_item(peer: int, item: String) -> void:
+	if not _panels.has(peer):
+		return
+	var p: Dictionary = _panels[peer]
+	p["item"] = item
+	p["item_left"] = maxf(BattleItems.seconds(item), 1.5)
+	(p["badge"] as TextureRect).texture = BattleItems.icon(item)
+
+
+## Their Shield took it: the badge goes.
+func clear_item(peer: int) -> void:
+	if _panels.has(peer):
+		(_panels[peer] as Dictionary)["item_left"] = 0.0
 
 
 ## Labels re-shape their text on every assignment; most frames nothing changed.

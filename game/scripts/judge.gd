@@ -48,6 +48,8 @@ var holds_dropped: int = 0
 var fuel: float = 1.0
 ## Practice runs: the tank never drains, so the song always plays to the end.
 var no_fail: bool = false
+## A battle's Nitro (ItemEffects): points count this many times over while it runs.
+var boost: float = 1.0
 var _fuel_cost: float = 1.0
 
 var _points: float = 0.0
@@ -68,7 +70,7 @@ func score() -> int:
 
 
 func multiplier() -> float:
-	return 1.0 + float(mini(combo, COMBO_FOR_MAX_MULTIPLIER)) / 25.0
+	return (1.0 + float(mini(combo, COMBO_FOR_MAX_MULTIPLIER)) / 25.0) * boost
 
 
 func is_holding() -> bool:
